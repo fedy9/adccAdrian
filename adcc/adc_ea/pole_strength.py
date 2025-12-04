@@ -129,7 +129,7 @@ def ea_adc3_f11(hf, mp, intermediates):
 def ea_adc3_f12(hf, mp, intermediates):
     # effective transition moments, ov part f_ia
     # Intermediates are defined in /adcc/adc_ip/pole_strength.py
-    return - mp.mp2_diffdm.ov + (intermediates.sigma_ov
+    return (- mp.mp2_diffdm.ov + (intermediates.sigma_ov
                                  + intermediates.m_3_plus
                                  + intermediates.m_3_minus
                                  ) / mp.df)
