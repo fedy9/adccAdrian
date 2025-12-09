@@ -146,7 +146,7 @@ class AdcMatrix(AdcMatrixlike):
         self.reference_state = hf_or_mp.reference_state
         self.mospaces = hf_or_mp.reference_state.mospaces
         self.is_core_valence_separated = method.is_core_valence_separated
-        self.ndim = 2
+        self.ndim = self.method.level // 2 + 1
         self.extra_terms = []
 
         self.intermediates = intermediates
@@ -162,21 +162,23 @@ class AdcMatrix(AdcMatrixlike):
             block_orders = tmp_orders
 
         # Sanity checks on block_orders
-        valid_blocks = {"pp": ("ph_ph", "ph_pphh", "pphh_ph", "pphh_pphh"),
-                        "ip": ("h_h", "h_phh", "phh_h", "phh_phh"),
-                        "ea": ("p_p", "p_pph", "pph_p", "pph_pph")}
+        self.valid_blocks = {
+            "pp": ("ph_ph", "ph_pphh", "pphh_ph", "pphh_pphh"),
+            "ip": ("h_h", "h_phh", "phh_h", "phh_phh"),
+            "ea": ("p_p", "p_pph", "pph_p", "pph_pph")
+            }[self.type]
         for block in block_orders.keys():
-            if block not in valid_blocks[self.type]:
+            if block not in self.valid_blocks:
                 raise ValueError(f"Invalid block order key: {block}")
-        if (block_orders[valid_blocks[self.type][1]]
-                != block_orders[valid_blocks[self.type][2]]):
-            raise ValueError(f"{valid_blocks[self.type][1]} and "
-                             f"{valid_blocks[self.type][2]} should always "
+        if (block_orders[self.valid_blocks[1]]
+                != block_orders[self.valid_blocks[2]]):
+            raise ValueError(f"{self.valid_blocks[1]} and "
+                             f"{self.valid_blocks[2]} should always "
                              "have the same order")
-        if block_orders[valid_blocks[self.type][1]] is not None \
-                and block_orders[valid_blocks[self.type][3]] is None:
-            raise ValueError(f"{valid_blocks[self.type][3]} cannot be None if "
-                             f"{valid_blocks[self.type][1]} isn't.")
+        if block_orders[self.valid_blocks[1]] is not None \
+                and block_orders[self.valid_blocks[3]] is None:
+            raise ValueError(f"{self.valid_blocks[3]} cannot be None if "
+                             f"{self.valid_blocks[1]} isn't.")
         self.block_orders = block_orders
 
         # Build the blocks and diagonals
@@ -287,13 +289,17 @@ class AdcMatrix(AdcMatrixlike):
         """Return the diagonal of the ADC matrix"""
         return self.__diagonal
 
-    def block_apply(self, block, tensor):
+    def block_apply(self, block, tensor_or_vector):
         """
         Compute the application of a block of the ADC matrix
         with another AmplitudeVector or Tensor. Non-matching blocks
         in the AmplitudeVector will be ignored.
         """
-        if not isinstance(tensor, libadcc.Tensor):
+        if isinstance(tensor_or_vector, AmplitudeVector):
+            tensor = getattr(tensor_or_vector, block.split("_")[1])
+        elif isinstance(tensor_or_vector, libadcc.Tensor):
+            tensor = tensor_or_vector
+        else:
             raise TypeError("tensor should be an adcc.Tensor")
 
         with self.timer.record(f"apply/{block}"):
@@ -676,3 +682,292 @@ class AdcMatrixProjected(AdcMatrix):
                                   "projected ADC matrices.")
         # TODO The way to implement this is to ask the inner matrix to
         #      a block_view and then wrap that in an AdcMatrixProjected.
+
+
+class ComplementaryBlockInverterNeumann:
+    """
+    Approximate application of (M_compl - omega I)^(-1) via a truncated 
+    Neumann expansion using either:
+
+    A)  A = D + V,   A^{-1} ≈ D^{-1} Σ_k (-D^{-1} V)^k
+    B)  A = α(I − R/α),   A^{-1} ≈ (1/α) Σ_k (R/α)^k
+
+    Parameters
+    ----------
+    full_matrix : AdcMatrix
+        Parent full ADC structure (provides block applies & diagonal).
+        The diagonals have to be from the unfolded matrix.
+    order : int
+        Neumann expansion order. <0 means exact diagonal inverse
+    use_scaled : bool
+        Whether to use scaled Neumann formulation B.
+    """
+
+    def __init__(self, full_matrix, complementary_space, complementary_block,
+                 order, use_scaled=False, check_residual=False):
+        self.M_full = full_matrix
+        self.order = order
+        self.use_scaled = use_scaled
+        self.block = complementary_block            # e.g. pphh_pphh
+        self.space = self.block.split("_")[0]       # e.g. pphh
+        self.check_residual = check_residual
+
+        if not isinstance(order, int):
+            raise ValueError("The given order has to be an integer.")
+        if order < 0:
+            raise ValueError("Neumann series only valid for orders >= 0.")
+
+    def apply_M(self, v):
+        """Applies complementary-block: M_compl v."""
+        return self.M_full.block_apply(self.block, v)
+
+    def apply_A(self, v, omega):
+        """Applies A v = (M_compl - ωI)v."""
+        return self.apply_M(v) - omega * v
+
+    def apply_V(self, v):
+        """Applies V = M_compl - D_compl.
+        No omega dependency because it is purely off-diagonal.
+        Do not use shifted D."""
+        return self.apply_M(v) - self.M_full.diagonal()[self.space] * v
+
+    # ---------------------------------------------------------------
+    # Method A: standard Neumann series using D^{-1}V
+    # ---------------------------------------------------------------
+    def neumann_apply(self, v, D_shifted, apply_V_fun, order):
+        """
+        A^{-1} v ≈ Σ_{k=0}^order (-D^{-1}V)^k D^{-1} v.
+        D is the diagonal of the complementary block.
+        """
+
+        term = v / D_shifted
+        res = term.copy()
+
+        for k in range(order):
+            # -(D^{-1} V) term
+            term = - apply_V_fun(term) / D_shifted
+            res += term
+
+        return res
+
+    # ---------------------------------------------------------------
+    # Method B: Automatic α chooser 
+    # ---------------------------------------------------------------
+    def choose_alpha(self, D_shifted, safety_factor=1.2):
+        """
+        α >= ||A|| so that ρ(R/α) < 1.
+        Uses diagonal estimate.
+        """
+        return safety_factor * float(abs(D_shifted).max())
+
+    # ---------------------------------------------------------------
+    # Method B: Scaled Neumann with α
+    # ---------------------------------------------------------------
+    def neumann_alpha_apply(self, v, omega, order, alpha):
+        # TODO: check equation
+        """
+        A^{-1} v ≈ (1/alpha) Σ_{k=0}^order (R/alpha)^k v   with R = alpha I - A.
+        """
+
+        def apply_R(v):
+            # R v = α v − A v
+            return alpha * v - self.apply_A(v, omega)
+
+        inv_alpha = 1.0 / alpha
+        
+        term = v.copy()
+        res = v.copy()
+
+        for k in range(order):
+            term = apply_R(term) * inv_alpha
+            res += term
+
+        return res * inv_alpha
+
+    # ---------------------------------------------------------------
+    # Main entry point
+    # ---------------------------------------------------------------
+    def apply(self, v, omega):
+        """
+        Compute approx (M_compl - ωI)^{-1} v.
+        """
+
+        # Shifted Diagonal of M
+        D_shifted = self.M_full.diagonal()[self.space] - omega
+
+        # ---------- METHOD A ----------
+        if not self.use_scaled:
+            res = self.neumann_apply(
+                v,
+                D_shifted=D_shifted,
+                apply_V_fun=lambda v: self.apply_V(v),
+                order=self.order
+            )
+
+        # ---------- METHOD B ----------
+        else:
+            alpha = self.choose_alpha(D_shifted)
+            # Safety measurements
+            if alpha <= 0:
+                alpha = 1.0
+            alpha = max(alpha, 1e-12)
+
+            res = self.neumann_alpha_apply(
+                v,
+                omega=omega,
+                order=self.order,
+                alpha=alpha
+            )
+
+        # ----------------------------------------------------
+        # Residual check (optional)
+        # ----------------------------------------------------
+        if self.check_residual:
+            Ax = self.apply_A(res, omega)
+            r = v - Ax
+
+            r_norm = np.sqrt(r @ r)
+            v_norm = np.sqrt(v @ v)
+            rel_r = r_norm / max(v_norm, 1e-14)
+
+            print(f"[Neumann] Residual: abs={r_norm:.3e}, rel={rel_r:.3e}")
+
+        return res
+
+
+class FoldedAdcMatrix(AdcMatrix):
+    """
+    Downfolded effective ADC matrix with Neumann expansion for complementary space inversion.
+
+    Parameters
+    ----------
+    matrix : AdcMatrix
+        The full ADC matrix to downfold.
+    complementary_space : str
+        The space to fold out (e.g., 'pphh').
+    omega : float
+        Frequency shift for the effective Hamiltonian.
+    neumann_order : int or None
+        Order of the Neumann expansion; -1 means exact inversion.
+    """
+
+    def __init__(self, matrix, complementary_space: str = "",
+                 omega: float = 0.0, neumann_order: int = -1,
+                 scaled_neumann: bool = False):
+
+        super().__init__(matrix.method, matrix.ground_state,
+                         block_orders=matrix.block_orders,
+                         intermediates=matrix.intermediates,
+                         diagonal_precomputed=matrix.diagonal())
+        self.omega = omega
+
+        if complementary_space == "":
+            complementary_space = matrix.axis_blocks[-1]
+        self.complementary_space = complementary_space
+
+        # Diagonal block name of complementary space
+        # Does not mean the block itself has to be diagonal
+        self.complementary_block = f"{complementary_space}_{complementary_space}"
+
+        # downfolded blocks: those that do NOT touch the complementary space
+        self.downfolded_blocks = [
+            blk for blk in self.valid_blocks 
+            if complementary_space not in blk.split("_")
+        ]
+
+        # coupling blocks (left/right) involving the complementary space
+        self.complementary_coupling_blocks_left = [
+            blk for blk in self.valid_blocks
+            if blk.split("_")[0] == complementary_space
+        ]
+        self.complementary_coupling_blocks_right = [
+            blk for blk in self.valid_blocks
+            if blk.split("_")[1] == complementary_space
+        ]
+        
+        # Remove the diagonal complementary block from coupling lists
+        if self.complementary_block in self.complementary_coupling_blocks_left:
+            self.complementary_coupling_blocks_left.remove(self.complementary_block)
+        if self.complementary_block in self.complementary_coupling_blocks_right:
+            self.complementary_coupling_blocks_right.remove(self.complementary_block)
+
+        # ----- Sanity checks -------------------------------------------------
+        if self.method.level < 2:
+            raise ValueError("ADC level has to be >1 for folded treatment.")
+
+        if self.complementary_block not in self.block_orders:
+            raise ValueError(f"Invalid complementary space: {complementary_space}.")
+        self.complementary_space = complementary_space
+
+        compl_block_order = self.block_orders[self.complementary_block]
+        if compl_block_order is None:
+            raise ValueError(f"Invalid complementary space for this expansion order: {complementary_space}.")
+        
+        # If diagonal (order == 0) then exact inversion; otherwise allow Neumann
+        if compl_block_order == 0:
+            if neumann_order >= 0:
+                # user provided a Neumann order but comp block is diagonal → will be ignored
+                print("The complementary block is diagonal so the inverse can "
+                      "be computed exactly; given 'neumann_order' will be ignored.")
+            self.neumann_order = 0
+            self.compl_solver = None
+        else:
+            # complementary block is non-diagonal; choose solver
+            if neumann_order == -1:
+                # if user wants exact inversion for a non-diagonal complementary block,
+                # we don't have a direct exact inner solver implemented here.
+                raise NotImplementedError("Exact inversion of the complementary block "
+                                          "is not implemented for non-diagonal blocks.")
+            self.neumann_order = neumann_order
+
+            # instantiate the Neumann inverter (uses full/unfolded ADC matrix)
+            self.compl_solver = ComplementaryBlockInverterNeumann(
+                full_matrix=matrix,
+                complementary_space=self.complementary_space,
+                complementary_block=self.complementary_block,
+                order=self.neumann_order,
+                use_scaled=scaled_neumann
+            )
+
+    def matvec(self, v):
+        """
+        Compute the downfolded ADC effective matrix acting on a vector `v`.
+        
+        Parameters
+        ----------
+        v : AmplitudeVector or Tensor
+            Vector in the downfolded (active) space.
+
+        Returns
+        -------
+        AmplitudeVector
+            Result of M_eff @ v in the active space.
+        """
+        # 1) Apply all blocks within the downfolded (active) space
+        res = sum(self.block_apply(bl, v) for bl in self.downfolded_blocks)
+
+        # 2) Apply left coupling blocks to project into complementary space
+        v_compl = sum(self.block_apply(bl, v)
+                      for bl in self.complementary_coupling_blocks_left)
+
+        # 3) Apply (M_compl - omega)^{-1} v_compl
+        if self.compl_solver is None:
+            v_compl = - v_compl /(self.unfolded_diagonal()[self.complementary_space] - self.omega)
+        else:
+            v_compl = - self.compl_solver.apply(v_compl, self.omega)
+
+        # 4) Apply right coupling blocks to project back into active space
+        res += sum(self.block_apply(bl, v_compl)
+                   for bl in self.complementary_coupling_blocks_right)
+
+        return res
+
+    def update_omega(self, new_omega: float):
+        self.omega = new_omega
+
+    def diagonal(self):
+        # TODO: exact diagonal of M_eff (omega)
+        raise NotImplementedError
+
+    def unfolded_diagonal(self):
+        return self._AdcMatrix__diagonal

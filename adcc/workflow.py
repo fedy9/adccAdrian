@@ -29,13 +29,14 @@ from . import solver
 from .guess import (guesses_any, guesses_singlet, guesses_doublet,
                     guesses_spin_flip, guesses_triplet)
 from .LazyMp import LazyMp
-from .AdcMatrix import AdcMatrix, AdcMatrixlike, AdcExtraTerm
+from .AdcMatrix import AdcMatrix, AdcMatrixlike, AdcExtraTerm, FoldedAdcMatrix
 from .AdcMethod import AdcMethod
 from .exceptions import InputError
 from .ExcitedStates import ExcitedStates
 from .ReferenceState import ReferenceState as adcc_ReferenceState
 from .solver.lanczos import lanczos
 from .solver.davidson import jacobi_davidson
+from .solver.jacobi import jacobi_solver
 from .solver.explicit_symmetrisation import (IndexSpinSymmetrisation,
                                              IndexSymmetrisation)
 
@@ -47,7 +48,7 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
             n_guesses_doubles=None, output=sys.stdout, core_orbitals=None,
             frozen_core=None, frozen_virtual=None, method=None,
             n_singlets=None, n_doublets=None, n_triplets=None,
-            n_spin_flip=None, is_alpha=None, environment=None,
+            n_spin_flip=None, is_alpha=None, environment=None, neumann_order=-1,
             **solverargs):
     """Run an ADC calculation.
 
@@ -239,8 +240,10 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
     diagres = diagonalise_adcmatrix(
         matrix, n_states, kind, guesses=guesses, n_guesses=n_guesses,
         n_guesses_doubles=n_guesses_doubles, conv_tol=conv_tol, output=output,
-        eigensolver=eigensolver, is_alpha=is_alpha,
+        eigensolver=eigensolver, is_alpha=is_alpha, neumann_order=neumann_order,
         spin_change=spin_change, **solverargs)
+    if eigensolver=="jacobi":
+        return diagres
     exstates = ExcitedStates(diagres)
     exstates.kind = kind
     exstates.spin_change = spin_change
@@ -417,7 +420,7 @@ def validate_state_parameters(matrix, n_states=None, n_singlets=None,
 
 def diagonalise_adcmatrix(matrix, n_states, kind, eigensolver="davidson",
                           guesses=None, n_guesses=None, n_guesses_doubles=None,
-                          conv_tol=None, output=sys.stdout, is_alpha=None,
+                          conv_tol=None, output=sys.stdout, is_alpha=None, neumann_order=-1,
                           spin_change=None, **solverargs):
     """
     This function seeks appropriate guesses and afterwards proceeds to
@@ -456,6 +459,13 @@ def diagonalise_adcmatrix(matrix, n_states, kind, eigensolver="davidson",
             "Lanczos", matrix, kind, solver.lanczos.default_print,
             is_alpha=is_alpha, output=output)
         run_eigensolver = lanczos
+    elif eigensolver == "jacobi":
+        # TODO: input for eigenvalues corresponding to guess vectors
+        matrix = FoldedAdcMatrix(matrix, neumann_order=neumann_order)
+        callback = setup_solver_printing(
+            "Jacobi", matrix, kind, solver.lanczos.default_print,
+            is_alpha=is_alpha, output=output)
+        run_eigensolver = jacobi_solver
     else:
         raise InputError(f"Solver {eigensolver} unknown, try 'davidson'.")
 
