@@ -709,7 +709,7 @@ class ComplementaryBlockInverterNeumann:
         self.order = order
         self.use_scaled = use_scaled
         self.block = complementary_block            # e.g. pphh_pphh
-        self.space = self.block.split("_")[0]       # e.g. pphh
+        self.space = complementary_space            # e.g. pphh
         self.check_residual = check_residual
 
         if not isinstance(order, int):
@@ -719,7 +719,7 @@ class ComplementaryBlockInverterNeumann:
 
     def apply_M(self, v):
         """Applies complementary-block: M_compl v."""
-        return self.M_full.block_apply(self.block, v)
+        return sum(block(v) for block in self.block.values())
 
     def apply_A(self, v, omega):
         """Applies A v = (M_compl - ωI)v."""
@@ -729,12 +729,12 @@ class ComplementaryBlockInverterNeumann:
         """Applies V = M_compl - D_compl.
         No omega dependency because it is purely off-diagonal.
         Do not use shifted D."""
-        return self.apply_M(v) - self.M_full.diagonal()[self.space] * v
+        return self.apply_M(v) - self.M_full.diagonal()[self.space] * v[self.space]
 
     # ---------------------------------------------------------------
     # Method A: standard Neumann series using D^{-1}V
     # ---------------------------------------------------------------
-    def neumann_apply(self, v, D_shifted, apply_V_fun, order):
+    def neumann_apply(self, v, D_shifted, order):
         """
         A^{-1} v ≈ Σ_{k=0}^order (-D^{-1}V)^k D^{-1} v.
         D is the diagonal of the complementary block.
@@ -745,7 +745,7 @@ class ComplementaryBlockInverterNeumann:
 
         for k in range(order):
             # -(D^{-1} V) term
-            term = - apply_V_fun(term) / D_shifted
+            term = -1.0 * self.apply_V(term) / D_shifted
             res += term
 
         return res
@@ -800,7 +800,6 @@ class ComplementaryBlockInverterNeumann:
             res = self.neumann_apply(
                 v,
                 D_shifted=D_shifted,
-                apply_V_fun=lambda v: self.apply_V(v),
                 order=self.order
             )
 
@@ -844,7 +843,7 @@ class FoldedAdcMatrix(AdcMatrix):
     matrix : AdcMatrix
         The full ADC matrix to downfold.
     complementary_space : str
-        The space to fold out (e.g., 'pphh').
+        The space to fold in (e.g., 'pphh').
     omega : float
         Frequency shift for the effective Hamiltonian.
     neumann_order : int or None
@@ -865,43 +864,53 @@ class FoldedAdcMatrix(AdcMatrix):
             complementary_space = matrix.axis_blocks[-1]
         self.complementary_space = complementary_space
 
+        # Downfolded blocks: those that do NOT touch the complementary space
+        self.downfolded_blocks = {}
+
         # Diagonal block name of complementary space
         # Does not mean the block itself has to be diagonal
-        self.complementary_block = f"{complementary_space}_{complementary_space}"
+        self.complementary_block_name = f"{complementary_space}_{complementary_space}"
+        self.complementary_block = {}
 
-        # downfolded blocks: those that do NOT touch the complementary space
-        self.downfolded_blocks = [
-            blk for blk in self.valid_blocks 
-            if complementary_space not in blk.split("_")
-        ]
+        # Coupling blocks (left/right) between downfolded & complementary blocks
+        self.complementary_coupling_blocks_left = {}
+        self.complementary_coupling_blocks_right = {}
 
-        # coupling blocks (left/right) involving the complementary space
-        self.complementary_coupling_blocks_left = [
-            blk for blk in self.valid_blocks
-            if blk.split("_")[0] == complementary_space
-        ]
-        self.complementary_coupling_blocks_right = [
-            blk for blk in self.valid_blocks
-            if blk.split("_")[1] == complementary_space
-        ]
-        
-        # Remove the diagonal complementary block from coupling lists
-        if self.complementary_block in self.complementary_coupling_blocks_left:
-            self.complementary_coupling_blocks_left.remove(self.complementary_block)
-        if self.complementary_block in self.complementary_coupling_blocks_right:
-            self.complementary_coupling_blocks_right.remove(self.complementary_block)
+        for block, apply in self.blocks.items():
+            left, right = block.split("_")
+            if block == self.complementary_block_name:
+                self.complementary_block[block] = apply
+            elif left == complementary_space:
+                self.complementary_coupling_blocks_left[block] = apply
+            elif right == complementary_space:
+                self.complementary_coupling_blocks_right[block] = apply
+            else:
+                self.downfolded_blocks[block] = apply
+
 
         # ----- Sanity checks -------------------------------------------------
         if self.method.level < 2:
             raise ValueError("ADC level has to be >1 for folded treatment.")
 
-        if self.complementary_block not in self.block_orders:
+        if self.complementary_block_name not in self.block_orders:
             raise ValueError(f"Invalid complementary space: {complementary_space}.")
         self.complementary_space = complementary_space
 
-        compl_block_order = self.block_orders[self.complementary_block]
+        compl_block_order = self.block_orders[self.complementary_block_name]
         if compl_block_order is None:
             raise ValueError(f"Invalid complementary space for this expansion order: {complementary_space}.")
+
+        if (len(self.complementary_coupling_blocks_left) != len(
+                                    self.complementary_coupling_blocks_right)):
+            raise ValueError(f"""There have to be the same number of coupling 
+                blocks: {self.complementary_coupling_blocks_left.keys()} != 
+                {self.complementary_coupling_blocks_left.keys()}""")
+
+        if len(self.complementary_block) == 0:
+            raise ValueError("No complementary block.")
+        
+        if len(self.complementary_block) > 1:
+            raise NotImplementedError("Downfolding only implemented for a single block.")
         
         # If diagonal (order == 0) then exact inversion; otherwise allow Neumann
         if compl_block_order == 0:
@@ -929,6 +938,7 @@ class FoldedAdcMatrix(AdcMatrix):
                 use_scaled=scaled_neumann
             )
 
+    @timed_member_call()
     def matvec(self, v):
         """
         Compute the downfolded ADC effective matrix acting on a vector `v`.
@@ -944,21 +954,19 @@ class FoldedAdcMatrix(AdcMatrix):
             Result of M_eff @ v in the active space.
         """
         # 1) Apply all blocks within the downfolded (active) space
-        res = sum(self.block_apply(bl, v) for bl in self.downfolded_blocks)
+        res = sum(block(v) for block in self.downfolded_blocks.values())
 
         # 2) Apply left coupling blocks to project into complementary space
-        v_compl = sum(self.block_apply(bl, v)
-                      for bl in self.complementary_coupling_blocks_left)
+        v_compl = sum(block(v) for block in self.complementary_coupling_blocks_left.values())
 
         # 3) Apply (M_compl - omega)^{-1} v_compl
         if self.compl_solver is None:
-            v_compl = - v_compl /(self.unfolded_diagonal()[self.complementary_space] - self.omega)
+            v_compl = -1.0 * v_compl /(self.unfolded_diagonal()[self.complementary_space] - self.omega)
         else:
-            v_compl = - self.compl_solver.apply(v_compl, self.omega)
+            v_compl = -1.0 * self.compl_solver.apply(v_compl, self.omega)
 
         # 4) Apply right coupling blocks to project back into active space
-        res += sum(self.block_apply(bl, v_compl)
-                   for bl in self.complementary_coupling_blocks_right)
+        res += sum(block(v_compl) for block in self.complementary_coupling_blocks_right.values())
 
         return res
 

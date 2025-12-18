@@ -243,8 +243,10 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
         eigensolver=eigensolver, is_alpha=is_alpha, neumann_order=neumann_order,
         spin_change=spin_change, **solverargs)
     if eigensolver=="jacobi":
-        return diagres
-    exstates = ExcitedStates(diagres)
+        # TODO: extend to n states
+        exstates = ExcitedStates(diagres[0])
+    else:
+        exstates = ExcitedStates(diagres)
     exstates.kind = kind
     exstates.spin_change = spin_change
     exstates.is_alpha = is_alpha

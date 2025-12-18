@@ -21,31 +21,36 @@
 ##
 ## ---------------------------------------------------------------------
 
-from adcc import AdcMatrix, AmplitudeVector, linear_combination
+from adcc import AdcMatrix, AmplitudeVector, evaluate
 from adcc import empty_like
 from .preconditioner import JacobiPreconditioner
 import numpy as np
 import scipy.sparse.linalg as sla
 import scipy.linalg as la
 import sys
+from .SolverStateBase import EigenSolverStateBase
+from adcc.timings import strtime, strtime_short
 
 
-class JacobiState:
-    def __init__(self, guess, previous_results):
+class JacobiState(EigenSolverStateBase):
+    def __init__(self, guess, previous_results, matrix):
+        super().__init__(matrix)
         self.eigenvector = guess
         self.previous_results = previous_results
-        self.eigenvalues = None         # Current eigenvalues
+        self.eigenvalue = None         # Current eigenvalue
         self.residual = None           # Current residuals
         self.residual_norm = None       # Corrunt residual norms
         self.iterates = []
         self.converged = None            # Flag whether iteration is converged
         self.n_iter = 0                  # Number of iterations
         self.n_applies = 0               # Number of applies
+        self.eigenvalues = []           # Converged eigenvalues
+        self.eigenvectors = []          # Converged eigenvectors
 
 
 def __jacobi_step(matrix, state, callback=None, debug_checks=False,
                   u2guess=None):
-    out = AmplitudeVector(ph=matrix @ state.eigenvector)
+    out = evaluate(matrix @ state.eigenvector)
 
     for r in state.previous_results:
         state.eigenvector -= (state.eigenvector @ r.eigenvector) * r.eigenvector
@@ -63,7 +68,8 @@ def __jacobi_step(matrix, state, callback=None, debug_checks=False,
     state.eigenvector.ph = vnorm_inv * (state.eigenvector.ph - (residual.ph / matrix.unfolded_diagonal().ph))
     state.residual_norms = np.array([rnorm])
     state.n_applies += 1
-    print(rnorm, state.eigenvalue)
+    time_iter = state.timer.current("iteration")
+    print(f"rnorm: {rnorm:.4E}, eigenval: {state.eigenvalue:.4f}, Iter time: {strtime(time_iter)}")
     return state
 
 
@@ -107,13 +113,14 @@ def jacobi_solver(matrix, guesses, n_ep=None, max_subspace=None,
     results = []
     for i, guess in enumerate(guesses):
         # Hack to take only singles guesses
-        state = JacobiState(AmplitudeVector(ph=guess.ph), results)
+        state = JacobiState(AmplitudeVector(ph=guess.ph), results, matrix)
         state.eigenvalue = residual_min_norm[i]
         # state.eigenvalue = guess @ (matrix @ guess)
         diis_maxvec = 8
         diis_vectors = []
         diis_residuals = []
         while not state.converged:
+            state.timer.restart("iteration")
             state.n_iter += 1
             matrix.update_omega(state.eigenvalue)
             state = __jacobi_step(matrix, state,
@@ -146,10 +153,15 @@ def jacobi_solver(matrix, guesses, n_ep=None, max_subspace=None,
             if convergence_test(state):
                 print("Energy: ", state.eigenvalue)
                 print("Applies: ", state.n_applies)
+                state.timer.stop("iteration")
+                soltime = state.timer.total("iteration")
+                print("    Total solver time:          ", strtime(soltime))
                 results.append(state)
             if state.n_iter == max_iter:
                 print("Maximum number of iterations (== " +
                                      str(max_iter) + " reached in Jacobi "
                                      "procedure.")
                 break
+        state.eigenvalues.append(state.eigenvalue)
+        state.eigenvectors.append(state.eigenvector)
     return results
