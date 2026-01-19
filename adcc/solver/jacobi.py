@@ -49,7 +49,7 @@ class JacobiState(EigenSolverStateBase):
 
 
 def __jacobi_step(matrix, state, callback=None, debug_checks=False,
-                  u2guess=None):
+                  u2guess=None, explicit_symmetrisation=None):
     out = evaluate(matrix @ state.eigenvector)
 
     for r in state.previous_results:
@@ -66,6 +66,11 @@ def __jacobi_step(matrix, state, callback=None, debug_checks=False,
     # state.eigenvector['s'] = 1.0 / vnorm * (state.eigenvector['s'] - (residual['s'] / matrix.ground_state.df("o1v1")))
     vnorm_inv = float(1 / vnorm)
     state.eigenvector.ph = vnorm_inv * (state.eigenvector.ph - (residual.ph / matrix.unfolded_diagonal().ph))
+
+    # Explicitly symmetrise the new vectors if requested
+    if explicit_symmetrisation:
+        explicit_symmetrisation.symmetrise(state.eigenvector)
+
     state.residual_norms = np.array([rnorm])
     state.n_applies += 1
     time_iter = state.timer.current("iteration")
@@ -99,6 +104,10 @@ def jacobi_solver(matrix, guesses, n_ep=None, max_subspace=None,
         if not isinstance(guess, AmplitudeVector):
             raise TypeError("One of the guesses is not of type AmplitudeVector")
 
+    if explicit_symmetrisation is not None and \
+            isinstance(explicit_symmetrisation, type):
+        explicit_symmetrisation = explicit_symmetrisation(matrix)
+
     if n_ep is None:
         n_ep = len(guesses)
     elif n_ep > len(guesses):
@@ -126,7 +135,8 @@ def jacobi_solver(matrix, guesses, n_ep=None, max_subspace=None,
             state = __jacobi_step(matrix, state,
                                   callback=callback,
                                   debug_checks=debug_checks,
-                                  u2guess=None)
+                                  u2guess=None,
+                                  explicit_symmetrisation=explicit_symmetrisation)
             diis_vectors.append(state.eigenvector)
             diis_residuals.append(state.residual)
             if len(diis_vectors) > diis_maxvec:

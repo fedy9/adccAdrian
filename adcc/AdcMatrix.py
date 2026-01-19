@@ -704,13 +704,15 @@ class ComplementaryBlockInverterNeumann:
     """
 
     def __init__(self, full_matrix, complementary_space, complementary_block,
-                 order, use_scaled=False, check_residual=False):
+                 order, use_scaled=False, check_residual=False,
+                 explicit_symmetrisation=None):
         self.M_full = full_matrix
         self.order = order
         self.use_scaled = use_scaled
         self.block = complementary_block            # e.g. pphh_pphh
         self.space = complementary_space            # e.g. pphh
         self.check_residual = check_residual
+        self.explicit_symmetrisation = explicit_symmetrisation
 
         if not isinstance(order, int):
             raise ValueError("The given order has to be an integer.")
@@ -741,11 +743,15 @@ class ComplementaryBlockInverterNeumann:
         """
 
         term = v / D_shifted
+        if self.explicit_symmetrisation:
+            self.explicit_symmetrisation.symmetrise(term)
         res = term.copy()
 
         for k in range(order):
             # -(D^{-1} V) term
             term = -1.0 * self.apply_V(term) / D_shifted
+            if self.explicit_symmetrisation:
+                self.explicit_symmetrisation.symmetrise(term)
             res += term
 
         return res
