@@ -742,14 +742,15 @@ class ComplementaryBlockInverterNeumann:
         D is the diagonal of the complementary block.
         """
 
-        term = v / D_shifted
+        term = (v / D_shifted).evaluate()
+        # TODO: forward explicit_symmetrisation in workflow
         if self.explicit_symmetrisation:
             self.explicit_symmetrisation.symmetrise(term)
         res = term.copy()
 
         for k in range(order):
             # -(D^{-1} V) term
-            term = -1.0 * self.apply_V(term) / D_shifted
+            term = (-1.0 * self.apply_V(term) / D_shifted).evaluate()
             if self.explicit_symmetrisation:
                 self.explicit_symmetrisation.symmetrise(term)
             res += term
@@ -967,7 +968,7 @@ class FoldedAdcMatrix(AdcMatrix):
 
         # 3) Apply (M_compl - omega)^{-1} v_compl
         if self.compl_solver is None:
-            v_compl = -1.0 * v_compl /(self.unfolded_diagonal()[self.complementary_space] - self.omega)
+            v_compl = -1.0 * v_compl / (self.unfolded_diagonal()[self.complementary_space] - self.omega).evaluate()
         else:
             v_compl = -1.0 * self.compl_solver.apply(v_compl, self.omega)
 
