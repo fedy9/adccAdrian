@@ -136,6 +136,56 @@ def cvs_adc3(*args, **kwargs):
     return run_adc(*args, **kwargs, method="cvs-adc3")
 
 
+@with_runadc_doc
+def ip_adc0(*args, **kwargs):
+    return run_adc(*args, **kwargs, method="ip-adc0")
+
+
+@with_runadc_doc
+def ip_adc1(*args, **kwargs):
+    return run_adc(*args, **kwargs, method="ip-adc1")
+
+
+@with_runadc_doc
+def ip_adc2(*args, **kwargs):
+    return run_adc(*args, **kwargs, method="ip-adc2")
+
+
+@with_runadc_doc
+def ip_adc2x(*args, **kwargs):
+    return run_adc(*args, **kwargs, method="ip-adc2x")
+
+
+@with_runadc_doc
+def ip_adc3(*args, **kwargs):
+    return run_adc(*args, **kwargs, method="ip-adc3")
+
+
+@with_runadc_doc
+def ea_adc0(*args, **kwargs):
+    return run_adc(*args, **kwargs, method="ea-adc0")
+
+
+@with_runadc_doc
+def ea_adc1(*args, **kwargs):
+    return run_adc(*args, **kwargs, method="ea-adc1")
+
+
+@with_runadc_doc
+def ea_adc2(*args, **kwargs):
+    return run_adc(*args, **kwargs, method="ea-adc2")
+
+
+@with_runadc_doc
+def ea_adc2x(*args, **kwargs):
+    return run_adc(*args, **kwargs, method="ea-adc2x")
+
+
+@with_runadc_doc
+def ea_adc3(*args, **kwargs):
+    return run_adc(*args, **kwargs, method="ea-adc3")
+
+
 def banner(colour=sys.stdout.isatty()):
     """Return a nice banner describing adcc and its components
 

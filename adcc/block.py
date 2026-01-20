@@ -31,3 +31,25 @@ def __getattr__(attr):
         raise AttributeError
     mapping = {"o": "o1", "v": "v1", "c": "o2"}
     return "".join(mapping[c] for c in attr)
+
+
+def get_block_name(spaces, order, variant, has_core_occupied_space):
+    """
+    Assembles name of block function with variant, spaces, and order.
+    Does some sanity checks.
+    """
+    if isinstance(variant, str):
+        variant = [variant]
+    elif variant is None:
+        variant = []
+
+    if has_core_occupied_space and "cvs" not in variant:
+        raise ValueError("Cannot run a general (non-core-valence approximated) "
+                         "ADC method on top of a ground state with a "
+                         "core-valence separation.")
+    if not has_core_occupied_space and "cvs" in variant:
+        raise ValueError("Cannot run a core-valence approximated ADC method on "
+                         "top of a ground state without a "
+                         "core-valence separation.")
+
+    return "_".join(["block"] + variant + spaces + [str(order)])
