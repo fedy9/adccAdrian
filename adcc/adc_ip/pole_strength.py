@@ -33,14 +33,9 @@ from .util import check_doubles_amplitudes, check_singles_amplitudes
 
 def pole_strength_ip_adc0(mp, amplitude, intermediates):
     check_singles_amplitudes([b.o], amplitude)
-    # Build Kronecker delta
-    hf = mp.reference_state
-    d_oo = zeros_like(hf.foo)
-    d_oo.set_mask("ii", 1.0)
-    f11 = d_oo
 
-    # Calculate the spectroscopic amplitude x
-    xi = einsum("j,ji->i", amplitude.h, f11)
+    # "Calculate" the spectroscopic amplitude x
+    xi = amplitude.h
 
     return dot(xi, xi)
 
