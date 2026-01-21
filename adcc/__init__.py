@@ -45,8 +45,8 @@ from .OneParticleOperator import OneParticleOperator
 from .opt_einsum_integration import register_with_opt_einsum
 
 # This has to be the last set of import
-from .guess import (guess_symmetries, guess_zero, guesses_any, guesses_singlet,
-                    guesses_spin_flip, guesses_triplet)
+from .guess.Guesses import Guesses
+from .guess.guess_zero import guess_symmetries, guess_zero
 from .workflow import run_adc
 from .exceptions import InputError
 
@@ -59,10 +59,11 @@ __all__ = ["run_adc", "InputError", "AdcMatrix",
            "HartreeFockProvider", "ExcitedStates", "State2States",
            "Excitation", "ElectronicTransition", "Tensor", "DictHfProvider",
            "DataHfProvider", "OneParticleOperator",
-           "guesses_singlet", "guesses_triplet", "guesses_any",
-           "guess_symmetries", "guesses_spin_flip", "guess_zero", "LazyMp",
+           "Guesses", "guess_symmetries", "guess_zero", "LazyMp",
            "adc0", "cis", "adc1", "adc2", "adc2x", "adc3",
            "cvs_adc0", "cvs_adc1", "cvs_adc2", "cvs_adc2x", "cvs_adc3",
+           "ip_adc0", "ip_adc1", "ip_adc2", "ip_adc2x", "ip_adc3",
+           "ea_adc0", "ea_adc1", "ea_adc2", "ea_adc2x", "ea_adc3",
            "banner"]
 
 __version__ = "0.16.1"
@@ -70,7 +71,7 @@ __license__ = "GPL v3"
 __url__ = "https://adc-connect.org"
 __authors__ = ["Michael F. Herbst", "Maximilian Scheurer", "Jonas Leitner",
                "Antonia Papapostolou", "Friederike Schneider",
-               "Adrian L. Dempwolff"]
+               "Adrian L. Dempwolff", "Adrian J. Müller"]
 __email__ = "developers@adc-connect.org"
 __contributors__ = []
 

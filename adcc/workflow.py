@@ -26,9 +26,7 @@ import warnings
 from libadcc import ReferenceState
 
 from . import solver
-from .guess import (guesses_any, guesses_singlet, guesses_doublet,
-                    guesses_spin_flip, guesses_triplet)
-from .guess import Guesses
+from .guess.Guesses import Guesses
 from .LazyMp import LazyMp
 from .AdcMatrix import AdcMatrix, AdcMatrixlike, AdcExtraTerm
 from .AdcMethod import AdcMethod
@@ -227,13 +225,9 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
     if env_matrix_term:
         matrix += env_matrix_term
     diagres = diagonalise_adcmatrix(
-        matrix, n_states, guesses=guesses, conv_tol=conv_tol, output=output,
-        eigensolver=eigensolver, **solverargs)
-    # diagres = diagonalise_adcmatrix(
-    #     matrix, n_states, kind, guesses=guesses, n_guesses=n_guesses,
-    #     n_guesses_doubles=n_guesses_doubles, conv_tol=conv_tol, output=output,
-    #     eigensolver=eigensolver, is_alpha=is_alpha,
-    #     spin_change=spin_change, **solverargs)
+        matrix, n_states, guesses=solver_guesses, conv_tol=conv_tol,
+        output=output, eigensolver=eigensolver, **solverargs)
+
     exstates = ExcitedStates(diagres)
     exstates.kind = kind
     exstates.spin_change = solver_guesses.spin_change
@@ -445,14 +439,18 @@ def construct_guesses(matrix, n_states, guesses=None, n_guesses=None,
     return solver_guesses
 
 
-def diagonalise_adcmatrix(matrix, n_states, kind, eigensolver="davidson",
-                          guesses=None, n_guesses=None, n_guesses_doubles=None,
-                          conv_tol=None, output=sys.stdout, is_alpha=None,
-                          spin_change=None, **solverargs):
+def diagonalise_adcmatrix(matrix, n_states, guesses=None, conv_tol=None,
+                          eigensolver="davidson", output=sys.stdout,
+                          **solverargs):
     """
     This function seeks appropriate guesses and afterwards proceeds to
     diagonalise the ADC matrix using the specified eigensolver.
     Internal function called from run_adc.
+
+    guesses : <class 'Guesses'>
+        Provide an instance of the 'Guesses' class containing  a list of
+        guess vectors and all additional, relevant information as attributes:
+        'n_guesses', 'kind', 'is_alpha', 'spin_block_symmetrisation'
     """
     reference_state = matrix.reference_state
 
@@ -468,28 +466,29 @@ def diagonalise_adcmatrix(matrix, n_states, kind, eigensolver="davidson",
 
     # Determine explicit_symmetrisation
     explicit_symmetrisation = IndexSymmetrisation
-    if solver_guesses.kind in ["singlet", "doublet", "triplet"]:
+    if guesses.kind in ["singlet", "doublet", "triplet"]:
         explicit_symmetrisation = IndexSpinSymmetrisation(
-            matrix, enforce_spin_kind=solver_guesses.kind
+            matrix, enforce_spin_kind=guesses.kind
         )
 
     # Set some solver-specific parameters
     if eigensolver == "davidson":
         callback = setup_solver_printing(
-            "Jacobi-Davidson", matrix, kind, solver.davidson.default_print,
-            is_alpha=is_alpha, output=output)
+            "Jacobi-Davidson", matrix, guesses.kind,
+            solver.davidson.default_print, is_alpha=guesses.is_alpha,
+            output=output)
         run_eigensolver = jacobi_davidson
     elif eigensolver == "lanczos":
         callback = setup_solver_printing(
-            "Lanczos", matrix, kind, solver.lanczos.default_print,
-            is_alpha=is_alpha, output=output)
+            "Lanczos", matrix, guesses.kind, solver.lanczos.default_print,
+            is_alpha=guesses.is_alpha, output=output)
         run_eigensolver = lanczos
     else:
         raise InputError(f"Solver {eigensolver} unknown, try 'davidson'.")
 
     solverargs.setdefault("which", "SA")
-    return run_eigensolver(matrix, guesses, n_ep=n_states, conv_tol=conv_tol,
-                           callback=callback,
+    return run_eigensolver(matrix, guesses.guesses, n_ep=n_states,
+                           conv_tol=conv_tol, callback=callback,
                            explicit_symmetrisation=explicit_symmetrisation,
                            **solverargs)
 

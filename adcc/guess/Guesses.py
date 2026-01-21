@@ -21,12 +21,12 @@
 ##
 ## ---------------------------------------------------------------------
 
-from .guess import guesses_from_diagonal
-from .exceptions import InputError
+from .guesses_from_diagonal import guesses_from_diagonal
+from adcc.exceptions import InputError
 import warnings
 
 
-def determine_spin_change(self, adc_type: str, kind: str, is_alpha: bool):
+def determine_spin_change(adc_type: str, kind: str, is_alpha: bool):
     if adc_type == "pp":
         if kind == "spin_flip":
             spin_change = -1
@@ -46,7 +46,7 @@ def determine_spin_change(self, adc_type: str, kind: str, is_alpha: bool):
 
 
 class Guesses:
-    def __init__(self, guesses: list|None, kind: str,
+    def __init__(self, guesses: list, kind: str,
                  adc_type: str, is_alpha: bool):
         if guesses is None:
             self.guesses = []
@@ -54,7 +54,7 @@ class Guesses:
             self.guesses = guesses
         self.n_guesses = len(self.guesses)
         self.kind = kind
-        self.is_alpha = self.is_alpha
+        self.is_alpha = is_alpha
 
         symmetrisation = {
             "singlet": "symmetric",
