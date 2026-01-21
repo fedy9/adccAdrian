@@ -224,10 +224,10 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
     # add terms to matrix
     if env_matrix_term:
         matrix += env_matrix_term
+
     diagres = diagonalise_adcmatrix(
         matrix, n_states, guesses=solver_guesses, conv_tol=conv_tol,
         output=output, eigensolver=eigensolver, **solverargs)
-
     exstates = ExcitedStates(diagres)
     exstates.kind = kind
     exstates.spin_change = solver_guesses.spin_change
