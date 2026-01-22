@@ -25,13 +25,18 @@ import warnings
 
 from libadcc import ReferenceState
 
+from typing import Optional
+
 from . import solver
-from .guess.Guesses import Guesses
+from .guess import (determine_spin_change, estimate_n_guesses,
+                    guesses_from_diagonal, get_spin_block_symmetrisation)
 from .LazyMp import LazyMp
 from .AdcMatrix import AdcMatrix, AdcMatrixlike, AdcExtraTerm
 from .AdcMethod import AdcMethod
+from .AmplitudeVector import AmplitudeVector
 from .exceptions import InputError
 from .ExcitedStates import ExcitedStates
+from .ChargedExcitations import DetachedStates, AttachedStates
 from .ReferenceState import ReferenceState as adcc_ReferenceState
 from .solver.lanczos import lanczos
 from .solver.davidson import jacobi_davidson
@@ -214,10 +219,6 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
         n_doublets=n_doublets, n_triplets=n_triplets, n_spin_flip=n_spin_flip,
         kind=kind, is_alpha=is_alpha)
     
-    # Construct guesses
-    solver_guesses = construct_guesses(matrix, n_states, guesses, n_guesses,
-                      n_guesses_doubles, kind, is_alpha, eigensolver)
-
     # Setup environment coupling terms and energy corrections
     env_matrix_term, env_energy_corrections = setup_environment(matrix,
                                                                 environment)
@@ -225,13 +226,44 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
     if env_matrix_term:
         matrix += env_matrix_term
 
+    # Construct guesses and determine spin_change 
+    if guesses is None:
+        spin_change = determine_spin_change(matrix.method, kind, is_alpha)
+        guesses = construct_guesses(
+            matrix, n_states, kind, spin_change, n_guesses, n_guesses_doubles,
+            is_alpha, eigensolver
+        )
+    else:
+        if len(guesses) < n_states:
+            raise InputError("Less guesses provided via guesses (== {}) "
+                            "than states to be computed (== {})"
+                            "".format(len(guesses), n_states))
+        if n_guesses is not None:
+            warnings.warn("Ignoring n_guesses parameter, since guesses are "
+                        "explicitly provided.")
+        if n_guesses_doubles is not None:
+            warnings.warn("Ignoring n_guesses_doubles parameter, since guesses"
+                        " are explicitly provided.")
+        # Set spin_change to None since we don't know if guesses are provided
+        spin_change = None
+
+
     diagres = diagonalise_adcmatrix(
-        matrix, n_states, guesses=solver_guesses, conv_tol=conv_tol,
-        output=output, eigensolver=eigensolver, **solverargs)
-    exstates = ExcitedStates(diagres)
+        matrix, n_states, guesses, kind, conv_tol=conv_tol,
+        output=output, eigensolver=eigensolver, is_alpha=is_alpha,
+        **solverargs)
+
+    if matrix.method.adc_type == "pp":
+        exstates = ExcitedStates(diagres)
+    elif matrix.method.adc_type == "ip":
+        exstates = DetachedStates(diagres, is_alpha)
+    elif matrix.method.adc_type == "ea":
+        exstates = AttachedStates(diagres, is_alpha)
+    else:
+        raise ValueError(f"Unknown ADC method: {matrix.method.name}")
+
     exstates.kind = kind
-    exstates.spin_change = solver_guesses.spin_change
-    exstates.is_alpha = is_alpha
+    exstates.spin_change = spin_change
 
     # add environment corrections to excited states
     exstates += env_energy_corrections
@@ -402,55 +434,95 @@ def validate_state_parameters(matrix, n_states=None, n_singlets=None,
     return n_states, kind, is_alpha
 
 
-def construct_guesses(matrix, n_states, guesses=None, n_guesses=None,
-                      n_guesses_doubles=None, kind="any", is_alpha=None,
-                      eigensolver="davidson"):
+def obtain_guesses_by_inspection(matrix, n_guesses, kind,
+                                 n_guesses_doubles=None, is_alpha=None,
+                                 spin_change=None):
+    """
+    Obtain guesses by inspecting the diagonal matrix elements.
+    If n_guesses_doubles is not None, this number is always adhered to.
+    Otherwise the number of doubles guesses is adjusted to fill up whatever
+    the singles guesses cannot provide to reach n_guesses.
+
+    matrix      The matrix for which guesses are to be constructed
+    is_alpha    Is the detached/attached electron alpha spin for the
+                respective IP-/EA-ADC calculation.
+    kwargs      Any other argument understood by guesses_from_diagonal.
+    """
+    spin_block_symmetrisation = get_spin_block_symmetrisation(kind)
+
+    if n_guesses_doubles is not None and len(matrix.axis_blocks) < 2:
+        raise InputError("n_guesses_doubles > 0 is only sensible if the "
+                         "ADC method has a doubles block (i.e. it is *not*"
+                         " ADC(0), ADC(1) or a variant thereof.")
+
+    # Determine number of singles guesses to request
+    if n_guesses_doubles is None:
+        n_guesses_doubles = 0
+
+    n_guesses_singles = n_guesses - n_guesses_doubles
+
+    guesses = guesses_from_diagonal(
+        matrix, n_guesses_singles, matrix.axis_blocks[0], kind,
+        is_alpha, spin_change, spin_block_symmetrisation)
+
+    # Determine number of doubles guesses to request if not
+    # explicitly specified
+    n_guesses_doubles = n_guesses - len(guesses)
+    if n_guesses_doubles > 0:
+        guesses += guesses_from_diagonal(
+            matrix, n_guesses_doubles, matrix.axis_blocks[1], kind,
+            is_alpha, spin_change, spin_block_symmetrisation)
+
+    if len(guesses) < n_guesses:
+        raise InputError("Less guesses found than requested: {} found, "
+                        "{} requested".format(
+                            len(guesses), n_guesses))
+    return guesses
+
+
+def construct_guesses(
+    matrix: AdcMatrix,
+    n_states: int,
+    kind: str,
+    spin_change: float,
+    n_guesses: int,
+    n_guesses_doubles: Optional[int] = None,
+    is_alpha: Optional[bool] = None,
+    eigensolver: Optional[str] = "davidson"
+    ) -> list[AmplitudeVector]:
     """
     This function constructs appropriate guesses if not given.
-    Returns a class object containing all crucial guess information.
+    Returns a :class:`Guesses` object containing all crucial guess information.
     Internal function called from run_adc.
     """
-    solver_guesses = Guesses(guesses, kind, matrix.method.adc_type, is_alpha)
+    if n_guesses is None:
+        # Set solver-specific parameters
+        if eigensolver == "davidson":
+            n_guesses_per_state = 2
+        else:
+            n_guesses_per_state = 1
+        n_guesses = estimate_n_guesses(matrix, n_states,
+                                        n_guesses_per_state)
 
-    # Obtain or check guesses
-    if guesses is None:
-        if n_guesses is None:
-            # Set solver-specific parameters
-            if eigensolver == "davidson":
-                n_guesses_per_state = 2
-            else:
-                n_guesses_per_state = 1
-            solver_guesses.estimate_n_guesses(matrix, n_states, 
-                                              n_guesses_per_state)
-        solver_guesses.obtain_guesses_by_inspection(matrix, n_guesses_doubles)
-    else:
-        if len(guesses) < n_states:
-            raise InputError("Less guesses provided via guesses (== {}) "
-                             "than states to be computed (== {})"
-                             "".format(len(guesses), n_states))
-        if n_guesses is not None:
-            warnings.warn("Ignoring n_guesses parameter, since guesses are "
-                          "explicitly provided.")
-        if n_guesses_doubles is not None:
-            warnings.warn("Ignoring n_guesses_doubles parameter, since guesses"
-                          " are explicitly provided.")
-        solver_guesses.n_guesses = len(guesses)
-
-    return solver_guesses
+    return obtain_guesses_by_inspection(
+        matrix, n_guesses, kind, n_guesses_doubles, is_alpha, spin_change
+    )
+    
 
 
-def diagonalise_adcmatrix(matrix, n_states, guesses=None, conv_tol=None,
+def diagonalise_adcmatrix(matrix, n_states, guesses, kind, conv_tol=None,
                           eigensolver="davidson", output=sys.stdout,
-                          **solverargs):
+                          is_alpha=None, **solverargs):
     """
     This function seeks appropriate guesses and afterwards proceeds to
     diagonalise the ADC matrix using the specified eigensolver.
     Internal function called from run_adc.
 
-    guesses : <class 'Guesses'>
-        Provide an instance of the 'Guesses' class containing  a list of
-        guess vectors and all additional, relevant information as attributes:
-        'n_guesses', 'kind', 'is_alpha', 'spin_block_symmetrisation'
+    matrix : AdcMatrix
+    n_states : int
+    guesses : list[AmplitudeVector]
+        A list of guess vectors
+    kind : str
     """
     reference_state = matrix.reference_state
 
@@ -466,28 +538,28 @@ def diagonalise_adcmatrix(matrix, n_states, guesses=None, conv_tol=None,
 
     # Determine explicit_symmetrisation
     explicit_symmetrisation = IndexSymmetrisation
-    if guesses.kind in ["singlet", "doublet", "triplet"]:
+    if kind in ["singlet", "doublet", "triplet"]:
         explicit_symmetrisation = IndexSpinSymmetrisation(
-            matrix, enforce_spin_kind=guesses.kind
+            matrix, enforce_spin_kind=kind
         )
 
     # Set some solver-specific parameters
     if eigensolver == "davidson":
         callback = setup_solver_printing(
-            "Jacobi-Davidson", matrix, guesses.kind,
-            solver.davidson.default_print, is_alpha=guesses.is_alpha,
+            "Jacobi-Davidson", matrix, kind,
+            solver.davidson.default_print, is_alpha=is_alpha,
             output=output)
         run_eigensolver = jacobi_davidson
     elif eigensolver == "lanczos":
         callback = setup_solver_printing(
-            "Lanczos", matrix, guesses.kind, solver.lanczos.default_print,
-            is_alpha=guesses.is_alpha, output=output)
+            "Lanczos", matrix, kind, solver.lanczos.default_print,
+            is_alpha=is_alpha, output=output)
         run_eigensolver = lanczos
     else:
         raise InputError(f"Solver {eigensolver} unknown, try 'davidson'.")
 
     solverargs.setdefault("which", "SA")
-    return run_eigensolver(matrix, guesses.guesses, n_ep=n_states,
+    return run_eigensolver(matrix, guesses, n_ep=n_states,
                            conv_tol=conv_tol, callback=callback,
                            explicit_symmetrisation=explicit_symmetrisation,
                            **solverargs)

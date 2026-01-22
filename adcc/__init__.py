@@ -36,6 +36,8 @@ from .functions import (copy, direct_sum, dot, einsum, empty_like,
 from .memory_pool import memory_pool
 from .State2States import State2States
 from .ExcitedStates import ExcitedStates
+from .ChargedExcitations import (ChargedExcitation, DetachedStates,
+                                 AttachedStates)
 from .Excitation import Excitation
 from .ElectronicTransition import ElectronicTransition
 from .DataHfProvider import DataHfProvider, DictHfProvider
@@ -45,8 +47,9 @@ from .OneParticleOperator import OneParticleOperator
 from .opt_einsum_integration import register_with_opt_einsum
 
 # This has to be the last set of import
-from .guess.Guesses import Guesses
-from .guess.guess_zero import guess_symmetries, guess_zero
+from .guess import (guess_symmetries, guess_zero, guesses_any,
+                    guesses_singlet, guesses_spin_flip, guesses_triplet,
+                    guesses_doublet)
 from .workflow import run_adc
 from .exceptions import InputError
 
@@ -57,9 +60,12 @@ __all__ = ["run_adc", "InputError", "AdcMatrix",
            "linear_combination", "zeros_like", "direct_sum",
            "memory_pool", "set_n_threads", "get_n_threads", "AmplitudeVector",
            "HartreeFockProvider", "ExcitedStates", "State2States",
+           "ChargedExcitation", "DetachedStates", "AttachedStates"
            "Excitation", "ElectronicTransition", "Tensor", "DictHfProvider",
-           "DataHfProvider", "OneParticleOperator",
-           "Guesses", "guess_symmetries", "guess_zero", "LazyMp",
+           "DataHfProvider", "OneParticleOperator", "LazyMp",
+           "guesses_singlet", "guesses_triplet", "guesses_doublet",
+           "guesses_any", "guesses_spin_flip", "get_spin_block_symmetrisation",
+           "guess_symmetries", "guess_zero", "guesses_from_diagonal",
            "adc0", "cis", "adc1", "adc2", "adc2x", "adc3",
            "cvs_adc0", "cvs_adc1", "cvs_adc2", "cvs_adc2x", "cvs_adc3",
            "ip_adc0", "ip_adc1", "ip_adc2", "ip_adc2x", "ip_adc3",
