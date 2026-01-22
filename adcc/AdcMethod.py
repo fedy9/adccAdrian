@@ -67,10 +67,13 @@ class AdcMethod:
         Return an equivalent method, where only the level is changed
         (e.g. calling this on a CVS method returns a CVS method)
         """
+        name_str = "adc"
+        if self.adc_type != "pp":
+            name_str = self.adc_type + "-" + "adc"
         if self.is_core_valence_separated:
-            return AdcMethod("cvs-adc" + str(newlevel))
+            return AdcMethod("cvs-" + name_str + str(newlevel))
         else:
-            return AdcMethod("adc" + str(newlevel))
+            return AdcMethod(name_str + str(newlevel))
 
     @property
     def name(self):

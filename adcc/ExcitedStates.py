@@ -144,8 +144,24 @@ class ExcitedStates(ElectronicTransition):
                 unit="x(au)    y(au)    z(au)    abs(au)"
             ))
             values.clear()
-            values.clear()
-        return self._describe(columns)
+
+        # Format the state information: kind, spin_change and convergence
+        state_info = []
+        if hasattr(self, "kind") and self.kind:
+            state_info.append(self.kind)
+        if hasattr(self, "spin_change") and self.spin_change is not None and \
+                self.spin_change != 0:
+            # For PP, spin_change can only be integer values
+            spin_change = int(self.spin_change)
+            state_info.append(f"(ΔMS={spin_change:+2d})")
+        if hasattr(self, "converged"):
+            conv = "converged" if self.converged else "NOT CONVERGED"
+            if state_info:  # add separator to previous entry
+                state_info[-1] += ","
+            state_info.append(conv)
+        state_info = " ".join(state_info)
+
+        return self._describe(columns, state_info)
 
     def to_qcvars(self, properties=False, recurse=False):
         """
