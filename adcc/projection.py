@@ -26,7 +26,7 @@ import itertools
 
 import numpy as np
 
-from .guess import guess_kwargs_kind, guess_symmetries
+from .guess import get_spin_block_symmetrisation, guess_symmetries
 from .Tensor import Tensor
 from .MoSpaces import expand_spaceargs
 from .Symmetry import Symmetry
@@ -333,7 +333,7 @@ def transfer_cvs_to_full(state_matrix_cvs, matrix_full, vector=None, kind=None,
                              "ExcitedStates object and spin symmetry setup is not "
                              "explicitly given.")
         return transfer_cvs_to_full(state_matrix_cvs, matrix_full, vector, kind,
-                                    **guess_kwargs_kind(kind))
+                                    get_spin_block_symmetrisation(kind))
 
     if vector is None:
         if hasattr(state_matrix_cvs, "excitation_vector"):
@@ -343,7 +343,7 @@ def transfer_cvs_to_full(state_matrix_cvs, matrix_full, vector=None, kind=None,
                              "ExcitedStates object.")
     if isinstance(vector, list):
         return [transfer_cvs_to_full(state_matrix_cvs, matrix_full, v, kind,
-                                     **guess_kwargs_kind(kind)) for v in vector]
+                                     get_spin_block_symmetrisation(kind)) for v in vector]
 
     if isinstance(state_matrix_cvs, AdcMatrixlike):
         mospaces_cvs = state_matrix_cvs.mospaces

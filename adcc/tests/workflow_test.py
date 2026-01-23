@@ -209,11 +209,6 @@ class TestWorkflow:
 
         matrix = adcc.AdcMatrix(method, testdata_cache.refstate(system, case=case))
 
-        res = diagonalise_adcmatrix(matrix, n_states=n_states, kind=kind,
-                                    eigensolver="davidson")
-        assert res.converged
-        assert res.eigenvalues[:n_states] == approx(ref_singlets[:n_states])
-
         guesses = adcc.guesses_singlet(matrix, n_guesses=6, block="ph")
         res = diagonalise_adcmatrix(matrix, n_states=n_states, kind=kind,
                                     guesses=guesses)
@@ -223,14 +218,14 @@ class TestWorkflow:
         with pytest.raises(InputError):  # Too low tolerance
             # SCF tolerance = 1e-14 currently
             res = diagonalise_adcmatrix(matrix, n_states=9, kind=kind,
-                                        eigensolver="davidson",
+                                        guesses=guesses,eigensolver="davidson",
                                         conv_tol=1e-15)
 
         with pytest.raises(InputError):  # Wrong solver method
             res = diagonalise_adcmatrix(matrix, n_states=9, kind=kind,
-                                        eigensolver="blubber")
+                                        guesses=guesses, eigensolver="blubber")
 
-        with pytest.raises(InputError):  # Too few guesses
+        with pytest.raises(ValueError):  # Too few guesses
             res = diagonalise_adcmatrix(matrix, n_states=9, kind=kind,
                                         eigensolver="davidson",
                                         guesses=guesses)

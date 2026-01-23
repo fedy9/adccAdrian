@@ -249,7 +249,7 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
 
 
     diagres = diagonalise_adcmatrix(
-        matrix, n_states, guesses, kind, conv_tol=conv_tol,
+        matrix, n_states, guesses, kind=kind, conv_tol=conv_tol,
         output=output, eigensolver=eigensolver, is_alpha=is_alpha,
         **solverargs)
 
@@ -436,7 +436,7 @@ def validate_state_parameters(matrix, n_states=None, n_singlets=None,
 
 def obtain_guesses_by_inspection(matrix, n_guesses, kind,
                                  n_guesses_doubles=None, is_alpha=None,
-                                 spin_change=None):
+                                 spin_change=0):
     """
     Obtain guesses by inspecting the diagonal matrix elements.
     If n_guesses_doubles is not None, this number is always adhered to.
@@ -449,11 +449,6 @@ def obtain_guesses_by_inspection(matrix, n_guesses, kind,
     kwargs      Any other argument understood by guesses_from_diagonal.
     """
     spin_block_symmetrisation = get_spin_block_symmetrisation(kind)
-
-    if n_guesses_doubles is not None and len(matrix.axis_blocks) < 2:
-        raise InputError("n_guesses_doubles > 0 is only sensible if the "
-                         "ADC method has a doubles block (i.e. it is *not*"
-                         " ADC(0), ADC(1) or a variant thereof.")
 
     # Determine number of singles guesses to request
     if n_guesses_doubles is None:
@@ -468,7 +463,13 @@ def obtain_guesses_by_inspection(matrix, n_guesses, kind,
     # Determine number of doubles guesses to request if not
     # explicitly specified
     n_guesses_doubles = n_guesses - len(guesses)
+
     if n_guesses_doubles > 0:
+        if matrix.method.level < 2:
+            raise InputError("n_guesses_doubles > 0 is only sensible if the "
+                         "ADC method has a doubles block (i.e. it is *not*"
+                         " ADC(0), ADC(1) or a variant thereof.")
+
         guesses += guesses_from_diagonal(
             matrix, n_guesses_doubles, matrix.axis_blocks[1], kind,
             is_alpha, spin_change, spin_block_symmetrisation)
@@ -510,7 +511,7 @@ def construct_guesses(
     
 
 
-def diagonalise_adcmatrix(matrix, n_states, guesses, kind, conv_tol=None,
+def diagonalise_adcmatrix(matrix, n_states, guesses, kind="any", conv_tol=None,
                           eigensolver="davidson", output=sys.stdout,
                           is_alpha=None, **solverargs):
     """

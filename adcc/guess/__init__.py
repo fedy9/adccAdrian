@@ -36,7 +36,7 @@ def get_spin_block_symmetrisation(kind: str) -> str:
     Return the kwargs required to be passed to `guesses_from_diagonal` to
     computed states of the passed excitation `kind`.
     """
-    kwargsmap = {
+    symmetrisation = {
         "singlet": "symmetric",
         "doublet": "none",
         "triplet": "antisymmetric",
@@ -44,7 +44,7 @@ def get_spin_block_symmetrisation(kind: str) -> str:
         "any": "none"
     }
     try:
-        return kwargsmap[kind]
+        return symmetrisation[kind]
     except KeyError:
         raise ValueError(f"Kind not known: {kind}")
 
@@ -63,8 +63,11 @@ def guesses_singlet(matrix, n_guesses, block="ph", **kwargs):
                 IP-/EA-ADC calculation.
     kwargs      Any other argument understood by guesses_from_diagonal.
     """
-    return guesses_from_diagonal(matrix, n_guesses, block=block,
-                                 spin_block_symmetrisation=guess_kwargs_kind("singlet"), **kwargs)
+    return guesses_from_diagonal(
+        matrix, n_guesses, block=block,
+        spin_block_symmetrisation=get_spin_block_symmetrisation("singlet"),
+        **kwargs
+    )
 
 
 def guesses_doublet(matrix, n_guesses, block="h", is_alpha=None, **kwargs):
@@ -81,10 +84,11 @@ def guesses_doublet(matrix, n_guesses, block="h", is_alpha=None, **kwargs):
                 IP-/EA-ADC calculation.
     kwargs      Any other argument understood by guesses_from_diagonal.
     """
-    return guesses_from_diagonal(matrix, n_guesses, block=block,
-                                 is_alpha=is_alpha,
-                                 **guess_kwargs_kind("doublet"),
-                                 **kwargs)
+    return guesses_from_diagonal(
+        matrix, n_guesses, block=block, is_alpha=is_alpha,
+        spin_block_symmetrisation= get_spin_block_symmetrisation("doublet"),
+        **kwargs
+    )
 
 
 def guesses_triplet(matrix, n_guesses, block="ph", **kwargs):
@@ -101,8 +105,11 @@ def guesses_triplet(matrix, n_guesses, block="ph", **kwargs):
                 IP-/EA-ADC calculation.
     kwargs      Any other argument understood by guesses_from_diagonal.
     """
-    return guesses_from_diagonal(matrix, n_guesses, block=block,
-                                 **guess_kwargs_kind("triplet"), **kwargs)
+    return guesses_from_diagonal(
+        matrix, n_guesses, block=block,
+        spin_block_symmetrisation= get_spin_block_symmetrisation("triplet"),
+        **kwargs
+    )
 
 
 # guesses for computing any state (excluding spin-flip states)
@@ -123,5 +130,8 @@ def guesses_spin_flip(matrix, n_guesses, block="ph", **kwargs):
                 IP-/EA-ADC calculation.
     kwargs      Any other argument understood by guesses_from_diagonal.
     """
-    return guesses_from_diagonal(matrix, n_guesses, block=block,
-                                 **guess_kwargs_kind("spin_flip"), **kwargs)
+    return guesses_from_diagonal(
+        matrix, n_guesses, block=block,
+        spin_block_symmetrisation= get_spin_block_symmetrisation("spin_flip"),
+        **kwargs
+    )
