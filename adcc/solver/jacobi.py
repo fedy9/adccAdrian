@@ -52,8 +52,8 @@ def __jacobi_step(matrix, state, callback=None, debug_checks=False,
                   u2guess=None, explicit_symmetrisation=None):
     out = evaluate(matrix @ state.eigenvector)
 
-    for r in state.previous_results:
-        state.eigenvector -= (state.eigenvector @ r.eigenvector) * r.eigenvector
+    # for r in state.previous_results:
+    #     state.eigenvector -= (state.eigenvector @ r.eigenvector) * r.eigenvector
 
     vnorm2 = state.eigenvector @ state.eigenvector
     vnorm = np.sqrt(vnorm2)
@@ -79,7 +79,7 @@ def __jacobi_step(matrix, state, callback=None, debug_checks=False,
 
 
 def jacobi_solver(matrix, guesses, n_ep=None, max_subspace=None,
-                  conv_tol=1e-12, max_iter=300, explicit_symmetrisation=None,
+                  conv_tol=1e-12, max_iter=1000, explicit_symmetrisation=None,
                   which="SA",
                   callback=None, preconditioner=None,
                   preconditioning_method="Davidson", debug_checks=False,
@@ -119,7 +119,10 @@ def jacobi_solver(matrix, guesses, n_ep=None, max_subspace=None,
         state.converged = np.all(state.residuals_converged)
         return state.converged
 
-    results = []
+    results = EigenSolverStateBase(matrix)
+    results.eigenvalues = []
+    results.eigenvectors = []
+    results.residual_norms = []
     for i, guess in enumerate(guesses):
         # Hack to take only singles guesses
         state = JacobiState(AmplitudeVector(ph=guess.ph), results, matrix)
@@ -166,12 +169,14 @@ def jacobi_solver(matrix, guesses, n_ep=None, max_subspace=None,
                 state.timer.stop("iteration")
                 soltime = state.timer.total("iteration")
                 print("    Total solver time:          ", strtime(soltime))
-                results.append(state)
+                results.eigenvalues.append(state.eigenvalue)
+                results.eigenvectors.append(state.eigenvector)
+                results.residual_norms.append(state.residual)
+                results.converged = True
+                results.n_iter += state.n_iter
             if state.n_iter == max_iter:
                 print("Maximum number of iterations (== " +
                                      str(max_iter) + " reached in Jacobi "
                                      "procedure.")
                 break
-        state.eigenvalues.append(state.eigenvalue)
-        state.eigenvectors.append(state.eigenvector)
     return results
