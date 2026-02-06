@@ -26,7 +26,7 @@ from typing import Optional
 
 
 def determine_spin_change(method: AdcMethod, kind: str,
-                          is_alpha: Optional[bool]):
+                          is_alpha: Optional[bool] = None):
     if method.adc_type == "pp":
         if kind == "spin_flip":
             spin_change = -1.0
