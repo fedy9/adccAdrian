@@ -26,29 +26,26 @@ from typing import Optional
 
 
 def determine_spin_change(method: AdcMethod, kind: str,
-                          is_alpha: Optional[bool] = None):
+                          is_alpha: Optional[bool] = None) -> int | float:
     if method.adc_type == "pp":
         if kind == "spin_flip":
-            spin_change = -1.0
+            return -1
         else:
-            spin_change = 0.0
+            return 0
     elif method.adc_type == "ip":
-        if kind == "spin_flip":
-            raise ValueError("Spin flip is only valid for PP-ADC")
-        else:
-            spin_change = +0.5 - int(is_alpha)
+        if is_alpha is None:
+            raise TypeError("'is_alpha' has to be True|False for IP-ADC")
+        return +0.5 - int(is_alpha)
     elif method.adc_type == "ea":
-        if kind == "spin_flip":
-            raise ValueError("Spin flip is only valid for PP-ADC")
-        else:
-            spin_change = -0.5 + int(is_alpha)
+        if is_alpha is None:
+            raise TypeError("'is_alpha' has to be True|False for EA-ADC")
+        return -0.5 + int(is_alpha)
     else:
         raise ValueError(f"Unknown ADC method: {method.name}")
-    return spin_change
 
 
 def estimate_n_guesses(matrix, n_states, n_guesses_per_state=2,
-                           singles_only=True):
+                           singles_only=True) -> int:
     """
     Implementation of a basic heuristic to find a good number of guess
     vectors to be searched for using the find_guesses function.

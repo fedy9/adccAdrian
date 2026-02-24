@@ -339,7 +339,8 @@ def construct_adcmatrix(data_or_matrix, core_orbitals=None, frozen_core=None,
 
 def validate_state_parameters(matrix, n_states=None, n_singlets=None,
                               n_doublets=None, n_triplets=None,
-                              n_spin_flip=None, kind="any", is_alpha=None):
+                              n_spin_flip=None, kind="any", is_alpha=None
+                              ) -> tuple[int, str, Optional[bool]]:
     """
     Check the passed state parameters for consistency with itself and with
     the passed reference and normalise them. In the end return the number of
@@ -372,6 +373,7 @@ def validate_state_parameters(matrix, n_states=None, n_singlets=None,
                              "with n_doublets > 0")
         kind = "doublet"
         n_states = n_doublets
+        is_alpha = True
     if n_triplets is not None:
         if not reference_state.restricted:
             raise InputError("The n_triplets parameter may only be employed "
@@ -457,8 +459,9 @@ def obtain_guesses_by_inspection(matrix, n_guesses, kind,
     n_guesses_singles = n_guesses - n_guesses_doubles
 
     guesses = guesses_from_diagonal(
-        matrix, n_guesses_singles, matrix.axis_blocks[0], kind,
-        is_alpha, spin_change, spin_block_symmetrisation)
+        matrix, n_guesses_singles, block=matrix.axis_blocks[0], kind=kind,
+        is_alpha=is_alpha, spin_change=spin_change,
+        spin_block_symmetrisation=spin_block_symmetrisation)
 
     # Determine number of doubles guesses to request if not
     # explicitly specified
@@ -509,7 +512,6 @@ def construct_guesses(
         matrix, n_guesses, kind, n_guesses_doubles, is_alpha, spin_change
     )
     
-
 
 def diagonalise_adcmatrix(matrix, n_states, guesses, kind="any", conv_tol=None,
                           eigensolver="davidson", output=sys.stdout,
