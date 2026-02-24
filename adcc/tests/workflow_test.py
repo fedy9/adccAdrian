@@ -432,7 +432,7 @@ class TestWorkflow:
 
     def test_diagonalise_adcmatrix_ip(self):
         from adcc.workflow import diagonalise_adcmatrix
-        pytest.skip("adcman referencedata not yet available")
+        # pytest.skip("adcman referencedata not yet available")
         system = "h2o_sto3g"
         case = "gen"
         method = "ip-adc2"
@@ -445,10 +445,10 @@ class TestWorkflow:
 
         matrix = adcc.AdcMatrix(method, testdata_cache.refstate(system, case=case))
 
-        guesses = adcc.guesses_singlet(matrix, n_guesses=6, block="h",
-                                       is_alpha=False)
+        guesses = adcc.guesses_doublet(matrix, n_guesses=6, block="h",
+                                       is_alpha=True)
         res = diagonalise_adcmatrix(matrix, n_states=n_states, kind=kind,
-                                    guesses=guesses, is_alpha=False)
+                                    guesses=guesses, is_alpha=True)
         assert res.converged
         assert res.eigenvalues[:n_states] == approx(ref_doublets[:n_states])
 
@@ -469,20 +469,19 @@ class TestWorkflow:
 
     def test_diagonalise_adcmatrix_ea(self):
         from adcc.workflow import diagonalise_adcmatrix
-        pytest.skip("adcman referencedata not yet available")
         system = "h2o_sto3g"
         case = "gen"
         method = "ea-adc2"
         kind = "doublet"
 
         refdata = testdata_cache.adcman_data(system, method=method, case=case,
-                                             is_alpha=True)
+                                             is_alpha=False)
         ref_doublets = refdata[kind]["eigenvalues"]
         n_states = min(len(ref_doublets), 3)
 
         matrix = adcc.AdcMatrix(method, testdata_cache.refstate(system, case=case))
 
-        guesses = adcc.guesses_singlet(matrix, n_guesses=6, block="p",
+        guesses = adcc.guesses_doublet(matrix, n_guesses=6, block="p",
                                        is_alpha=True)
         res = diagonalise_adcmatrix(matrix, n_states=n_states, kind=kind,
                                     guesses=guesses, is_alpha=True)
