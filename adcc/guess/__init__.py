@@ -25,7 +25,7 @@ from .guesses_from_diagonal import guesses_from_diagonal
 from .util import estimate_n_guesses, determine_spin_change
 
 __all__ = ["guess_zero", "guesses_from_diagonal", 
-           "get_spin_block_symmetrisation",
+           "get_spin_block_symmetrisation", "guesses_doublet",
            "guesses_singlet", "guesses_triplet", "guesses_any",
            "guesses_spin_flip", "guess_symmetries",
            "estimate_n_guesses", "determine_spin_change"]
@@ -64,13 +64,13 @@ def guesses_singlet(matrix, n_guesses, block="ph", **kwargs):
     kwargs      Any other argument understood by guesses_from_diagonal.
     """
     return guesses_from_diagonal(
-        matrix, n_guesses, block=block,
+        matrix, n_guesses, block=block, spin_change=0,
         spin_block_symmetrisation=get_spin_block_symmetrisation("singlet"),
         **kwargs
     )
 
 
-def guesses_doublet(matrix, n_guesses, block="h", is_alpha=None, **kwargs):
+def guesses_doublet(matrix, n_guesses, block="h", is_alpha=True, **kwargs):
     """
     Obtain guesses for computing doublet states by inspecting the passed
     ADC matrix.
@@ -84,8 +84,13 @@ def guesses_doublet(matrix, n_guesses, block="h", is_alpha=None, **kwargs):
                 IP-/EA-ADC calculation.
     kwargs      Any other argument understood by guesses_from_diagonal.
     """
+    if matrix.method.adc_type == "ip":
+        spin_change = -0.5
+    elif matrix.method.adc_type == "ea":
+        spin_change = 0.5
     return guesses_from_diagonal(
-        matrix, n_guesses, block=block, is_alpha=is_alpha,
+        matrix, n_guesses, block=block,
+        is_alpha=is_alpha, spin_change=spin_change,
         spin_block_symmetrisation= get_spin_block_symmetrisation("doublet"),
         **kwargs
     )
@@ -106,7 +111,7 @@ def guesses_triplet(matrix, n_guesses, block="ph", **kwargs):
     kwargs      Any other argument understood by guesses_from_diagonal.
     """
     return guesses_from_diagonal(
-        matrix, n_guesses, block=block,
+        matrix, n_guesses, block=block, spin_change=0,
         spin_block_symmetrisation= get_spin_block_symmetrisation("triplet"),
         **kwargs
     )
@@ -131,7 +136,7 @@ def guesses_spin_flip(matrix, n_guesses, block="ph", **kwargs):
     kwargs      Any other argument understood by guesses_from_diagonal.
     """
     return guesses_from_diagonal(
-        matrix, n_guesses, block=block,
+        matrix, n_guesses, block=block, spin_change=-1,
         spin_block_symmetrisation= get_spin_block_symmetrisation("spin_flip"),
         **kwargs
     )
