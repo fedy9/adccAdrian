@@ -180,6 +180,7 @@ DISPATCH = {
     "ip-adc0": pole_strength_ip_adc0,
     "ip-adc1": pole_strength_ip_adc0,
     "ip-adc2": pole_strength_ip_adc2,
+    "ip-adc2x": pole_strength_ip_adc2,
     "ip-adc3": pole_strength_ip_adc3,
 }
 

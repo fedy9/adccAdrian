@@ -149,6 +149,7 @@ DISPATCH = {
     "ea-adc0": pole_strength_ea_adc0,
     "ea-adc1": pole_strength_ea_adc0,
     "ea-adc2": pole_strength_ea_adc2,
+    "ea-adc2x": pole_strength_ea_adc2,
     "ea-adc3": pole_strength_ea_adc3,
 }
 
