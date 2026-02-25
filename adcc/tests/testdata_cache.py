@@ -159,11 +159,6 @@ class TestdataCache:
                         f"No data available for case {case} and "
                         f"gs_density_order {gs_density_order} in file {datafile}."
                     )
-                elif (source == "adcman" and
-                        f"{case}/{gs_density_order}/beta" in hdf5_file):
-                    # Little hack to load betas in case of a restricted adcman
-                    # calculation because the default spin type is different
-                    key = f"{case}/{gs_density_order}/beta"
                 else:
                     raise ValueError(
                         f"No data available for case {case}, gs_density_order "
@@ -265,10 +260,6 @@ class TestdataCache:
         else:
             raise ValueError(f"Unknown kind: {kind}")
 
-        if source == "adcman" and refstate.restricted:
-            # Little hack to build beta states for a restricted case
-            is_alpha = False
-            # matrix.reference_state.restricted = False
         spin_change = determine_spin_change(matrix.method, kind, is_alpha)
 
         n_states = len(adc_data["eigenvalues"])
@@ -283,10 +274,6 @@ class TestdataCache:
                 evec[blocks[1]].set_from_ndarray(
                     adc_data["eigenvectors_doubles"][i], 1e-14
                 )
-
-        # if source == "adcman" and refstate.restricted:
-        #     # Revert changes above for restricted adcman references
-        #     matrix.reference_state.restricted = True
 
         if matrix.method.adc_type == "pp":
             return ExcitedStates(states)

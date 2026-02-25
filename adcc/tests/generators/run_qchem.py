@@ -368,14 +368,6 @@ def generate_qchem_input_file(infile: str, method: AdcMethod, basis: str, xyz: s
         scf_options.extend(["scf_guess                read",
                             "max_scf_cycles           0"])
 
-    # Q-Chem does not take eom_ip_alpha and beta for a restricted calculation
-    ip_restricted_states = ip_states[0] if ip_states[1] == 0 else 0
-    if ip_restricted_states:
-        ip_states = (0, 0)
-    ea_restricted_states = ea_states[0] if ea_states[1] == 0 else 0
-    if ea_restricted_states:
-        ea_states = (0, 0)
-
     input = _qchem_template.format(
         method=method,
         basis=basis,
@@ -384,8 +376,6 @@ def generate_qchem_input_file(infile: str, method: AdcMethod, basis: str, xyz: s
         singlet_states=singlet_states,
         triplet_states=triplet_states,
         sf_states=sf_states,
-        ip_restricted_states=ip_restricted_states,
-        ea_restricted_states=ea_restricted_states,
         ip_states_alpha=ip_states[0],
         ip_states_beta=ip_states[1],
         ea_states_alpha=ea_states[0],
@@ -426,8 +416,6 @@ ee_states                {any_states}
 ee_singlets              {singlet_states}
 ee_triplets              {triplet_states}
 sf_states                {sf_states}
-ip_states                {ip_restricted_states}
-ea_states                {ea_restricted_states}
 eom_ip_alpha             {ip_states_alpha}
 eom_ip_beta              {ip_states_beta}
 eom_ea_alpha             {ea_states_alpha}

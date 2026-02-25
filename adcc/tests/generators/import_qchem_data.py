@@ -78,7 +78,7 @@ def import_excited_states(context: h5py.File, method: AdcMethod,
             method_name += "s"
     else:
         method_name: str = method.name.split('-')[-1] # No cvs (yet)
-    restricted = "rhf" in context[f"/adc_{method.adc_type}"][method_name].keys()
+    restricted = "rhf" in context[f"adc_{method.adc_type}"][method_name].keys()
     
     # go through the different possible state kinds and import the states.
     data = {}
@@ -106,7 +106,7 @@ def import_excited_states(context: h5py.File, method: AdcMethod,
             data[kind_map.get(kind, kind)] = states
         elif method.adc_type in ("ip", "ea"):
             if restricted:
-                data["beta"] = {"doublet": states}
+                data["alpha"] = {"doublet": states}
             else:
                 data[kind_map.get(kind, kind)] = {"any": states}
     if not data:
