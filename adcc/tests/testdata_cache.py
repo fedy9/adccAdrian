@@ -179,6 +179,8 @@ class TestdataCache:
         reference case (cvs, fc, fv-cvs, ...) and optionally gs_density_order
         (2, 3, sigma4+, ...) and optionally is_alpha for IP/EA data.
         """
+        if ("ip" in method or "ea" in method) and is_alpha is None:
+            is_alpha = True
         return self._load_data(
             system=system, method=method, case=case,
             gs_density_order=gs_density_order, source="adcc", is_alpha=is_alpha
@@ -191,6 +193,8 @@ class TestdataCache:
         reference case (cvs, fc, fv-cvs, ...) and optionally gs_density_order
         (2, 3, sigma4+, ...) and optionally is_alpha for IP/EA data.
         """
+        if ("ip" in method or "ea" in method) and is_alpha is None:
+            is_alpha = True
         return self._load_data(
             system=system, method=method, case=case,
             gs_density_order=gs_density_order, source="adcman",
@@ -303,6 +307,8 @@ class TestdataCache:
         state kind (singlet/triplet/any/...) and optionally gs_density_order 
         (2/3/sigma4+) using the adcc eigenstates and eigenvalues.
         """
+        if ("ip" in method or "ea" in method) and is_alpha is None:
+            is_alpha = True
         return self._make_mock_adc_state(
             system, method=method, case=case, kind=kind,
             gs_density_order=gs_density_order, source="adcc", is_alpha=is_alpha
@@ -318,6 +324,8 @@ class TestdataCache:
         state kind (singlet/triplet/any/...) and optionally gs_density_order 
         (2/3/sigma4+) using the adcman eigenstates and eigenvalues.
         """
+        if ("ip" in method or "ea" in method) and is_alpha is None:
+            is_alpha = True
         return self._make_mock_adc_state(
             system, method=method, case=case, kind=kind,
             gs_density_order=gs_density_order, source="adcman",

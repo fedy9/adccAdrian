@@ -71,20 +71,17 @@ def generate_adc(test_case: testcases.TestCase, method: AdcMethod, case: str,
         is_alpha=is_alpha, **kwargs
     )
     assert states.kind == kind  # maybe we predicted wrong?
-    if f"{key}/matrix" not in hdf5_file:
-        # the matrix data is only dumped once for each case. I think it does not
-        # make sense to dump the data once for a singlet and once for a triplet
-        # trial vector.
+    if method.adc_type in ("ip", "ea"):
+        key = f"{key}/{spin}"
+    if f"{key}/matrix" not in hdf5_file and spin == "alpha":
+        # the matrix data is only dumped once for each case and only for alpha.
+        # I think it does not make sense to dump the data once for a singlet 
+        # and once for a triplet trial vector as well as an alpha and a beta one.
         matrix_group = hdf5_file.create_group(f"{key}/matrix")
         trial_vec = adcc_copy(states.excitation_vector[0]).set_random()
         dump_matrix_testdata(states.matrix, trial_vec, matrix_group)
     # dump the excited states data
-    if method.adc_type == "pp":
-        kind_group = hdf5_file.create_group(f"{key}/{states.kind}")
-    elif method.adc_type in ("ip", "ea"):
-        kind_group = hdf5_file.create_group(f"{key}/{spin}/{states.kind}")
-    else:
-        raise ValueError(f"Unknown ADC method: {method.name}")
+    kind_group = hdf5_file.create_group(f"{key}/{states.kind}")
     dump_excited_states(states, kind_group, dump_nstates=dump_nstates)
 
 
