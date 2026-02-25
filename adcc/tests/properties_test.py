@@ -147,7 +147,6 @@ class TestProperties:
         )
 
         res_pols = state.pole_strength
-        print(refdata.keys())
         refevals = refdata["eigenvalues"]
         ref_pols = refdata["pole_strengths"]
 

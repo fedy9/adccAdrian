@@ -33,7 +33,9 @@ from . import testcases
 
 
 pp_methods = ["adc0", "adc1", "adc2", "adc2x", "adc3"]
-ip_ea_methods = [t + m for t in ["ip-", "ea-"] for m in pp_methods]
+# No need to test IP/EA-ADC(1) since it is equivalent to IP/EA-ADC(0)
+ip_ea_methods = [
+    t + m for t in ["ip-", "ea-"] for m in ["adc0", "adc2", "adc2x", "adc3"]]
 generators = ["adcman", "adcc"]
 
 
