@@ -131,11 +131,7 @@ class TestProperties:
     def test_pole_strengths(self, system: str, method: str, case: str,
                             kind: str, is_alpha: bool, generator: str):
         if generator == "adcman":
-            if system.startswith("h2o"):
-                pytest.skip("Difficulties with data import for restricted cases")
-            if method.endswith("adc1"):
-                pytest.skip("No adcman reference data for IP/EA-ADC(1)")
-            elif method.endswith("adc2x"):
+            if method.endswith("adc2x"):
                 pytest.skip("No adcman reference data yet for IP/EA-ADC(2)-x")
         refdata = testdata_cache._load_data(
             system=system, method=method, case=case, source=generator,
@@ -179,11 +175,9 @@ class TestProperties:
                                         case: str, kind: str, is_alpha: bool,
                                         generator: str):
         if generator == "adcman":
-            if system.startswith("h2o"):
-                pytest.skip("Difficulties with data import for restricted cases")
-            if method.endswith("adc1"):
-                pytest.skip("No adcman reference data for IP/EA-ADC(1)")
-            elif method.endswith("adc2x"):
+            pytest.xfail("Dipole moment of charged species is gauge dependent."
+                         " Not (yet) implemented in adcc in contrast to adcman.")
+            if method.endswith("adc2x"):
                 pytest.skip("No adcman reference data yet for IP/EA-ADC(2)-x")
             if system.startswith("cn"):
                 pytest.xfail("Faulty adcman GS dipole moments")
@@ -235,11 +229,7 @@ class TestProperties:
         self, system: str, method: str, case: str, kind: str, is_alpha: bool,
         generator: str):
         if generator == "adcman":
-            if system.startswith("h2o"):
-                pytest.skip("Difficulties with data import for restricted cases")
-            if method.endswith("adc1"):
-                pytest.skip("No adcman reference data for IP/EA-ADC(1)")
-            elif method.endswith("adc2x"):
+            if method.endswith("adc2x"):
                 pytest.skip("No adcman reference data yet for IP/EA-ADC(2)-x")
         refdata = testdata_cache._load_data(
             system=system, method=method, case=case, source=generator,

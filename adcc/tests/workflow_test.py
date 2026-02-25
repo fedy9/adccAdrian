@@ -438,8 +438,7 @@ class TestWorkflow:
         method = "ip-adc2"
         kind = "doublet"
 
-        refdata = testdata_cache.adcman_data(system, method=method, case=case,
-                                             is_alpha=False)
+        refdata = testdata_cache.adcman_data(system, method=method, case=case)
         ref_doublets = refdata[kind]["eigenvalues"]
         n_states = min(len(ref_doublets), 3)
 
@@ -474,8 +473,7 @@ class TestWorkflow:
         method = "ea-adc2"
         kind = "doublet"
 
-        refdata = testdata_cache.adcman_data(system, method=method, case=case,
-                                             is_alpha=False)
+        refdata = testdata_cache.adcman_data(system, method=method, case=case)
         ref_doublets = refdata[kind]["eigenvalues"]
         n_states = min(len(ref_doublets), 3)
 
@@ -569,7 +567,7 @@ class TestWorkflow:
         # Only doubles guesses
         res = obtain_guesses_by_inspection(matrix2, n_guesses=4, 
                                            kind="doublet",
-                                           spin_change=-0.5, is_alpha=False,
+                                           spin_change=-0.5, is_alpha=True,
                                            n_guesses_doubles=4)
         assert len(res) == 4
 

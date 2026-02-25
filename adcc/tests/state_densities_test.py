@@ -94,11 +94,7 @@ class TestStateDensities:
     def test_state_diffdm_ip_ea(self, system: str, method: str, case: str,
                                 kind: str, is_alpha: bool, generator: str):
         if generator == "adcman":
-            if system.startswith("h2o"):
-                pytest.skip("Difficulties with data import for restricted cases")
-            if method.endswith("adc1"):
-                pytest.skip("No adcman reference data for IP/EA-ADC(1)")
-            elif method.endswith("adc2x"):
+            if method.endswith("adc2x"):
                 pytest.skip("No adcman reference data yet for IP/EA-ADC(2)-x")
         refdata = testdata_cache._load_data(
             system=system, method=method, case=case, source=generator,
@@ -203,11 +199,7 @@ class TestStateDensities:
     def test_state_to_state_tdm_ip_ea(self, system: str, method: str, case: str,
                                 kind: str, is_alpha: bool, generator: str):
         if generator == "adcman":
-            if system.startswith("h2o"):
-                pytest.skip("Difficulties with data import for restricted cases")
-            if method.endswith("adc1"):
-                pytest.skip("No adcman reference data for IP/EA-ADC(1)")
-            elif method.endswith("adc2x"):
+            if method.endswith("adc2x"):
                 pytest.skip("No adcman reference data yet for IP/EA-ADC(2)-x")
             
         refdata = testdata_cache._load_data(
@@ -217,10 +209,6 @@ class TestStateDensities:
         if len(refdata["eigenvalues"]) < 2:
             pytest.skip("Less than two states available.")
         s2s_data = refdata["state_to_state"]
-
-
-        if generator == "adcman" and system.startswith("h2o"):
-            is_alpha = False
 
         # construct a ExcitedStates instance using the eigenvalues and eigenstates
         # from the reference data.
