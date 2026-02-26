@@ -28,7 +28,8 @@ from adcc.AdcMethod import AdcMethod
 from adcc.functions import einsum
 from adcc.Intermediates import Intermediates
 from adcc.AmplitudeVector import AmplitudeVector
-from adcc.OneParticleOperator import OneParticleOperator
+from adcc.OneParticleDensity import OneParticleDensity
+from adcc.NParticleOperator import OperatorSymmetry
 
 from .util import check_doubles_amplitudes, check_singles_amplitudes
 
@@ -37,7 +38,7 @@ def diffdm_ea_adc0(mp, amplitude, intermediates):
     check_singles_amplitudes([b.v], amplitude)
     u1 = amplitude.p
 
-    dm = OneParticleOperator(mp, is_symmetric=True)
+    dm = OneParticleDensity(mp, symmetry=OperatorSymmetry.HERMITIAN)
     dm.vv = einsum("a,b->ab", u1, u1)
     return dm
 

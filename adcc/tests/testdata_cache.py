@@ -312,7 +312,7 @@ class TestdataCache:
 
     def adcman_states(self, system: str, method: str, kind: str,
                       case: str, gs_density_order: Optional[int] = None,
-                      is_alpha: Optional[bool]
+                      is_alpha: Optional[bool] = None
                       ) -> ExcitedStates | AttachedStates | DetachedStates:
         """
         Create an ExcitedStates/AttachedStates/DetachedStates instance for the  
