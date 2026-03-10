@@ -185,7 +185,7 @@ class AdcMatrixlike:
         if method.adc_type == "pp":
             return n_particle == n_hole
         elif method.adc_type == "ip":
-            return n_particle == n_hole - 1 
+            return n_particle == n_hole - 1
         elif method.adc_type == "ea":
             return n_particle == n_hole + 1
         raise ValueError(f"Unknown adc type {method.adc_type} for method "
@@ -778,3 +778,247 @@ class AdcMatrixProjected(AdcMatrix):
                                   "projected ADC matrices.")
         # TODO The way to implement this is to ask the inner matrix to
         #      a block_view and then wrap that in an AdcMatrixProjected.
+
+
+class AdcMatrixSchur(AdcMatrix):
+    """
+    ADC matrix using Schur-complement elimination of high-energy doubles (D) configurations.
+
+    The D space is split according to the diagonal energies:
+
+        D = D_1 (kept) + D_2 (eliminated)
+
+    The eliminated part is reconstructed during matvec via
+
+         v_D2 = (w - M_D2D2)^(-1) (M_D2S v_S + M_D2D1 v_D1 )
+
+    Only D1 amplitudes are passed in or returned externally.
+    """
+
+    def __init__(self, method, hf_or_mp,
+                 energy_cutoff_ev: float = 30.0,
+                 w: float = 0.0,
+                 include_partitioning_space_coupling: bool = True,
+                 precompute_schur: bool = False,
+                 **kwargs):
+
+        super().__init__(method, hf_or_mp, **kwargs)
+
+        # Convert eV to au
+        self.energy_cutoff = energy_cutoff_ev / 27.2114
+        self.w = w
+        self.partitioning_space = self.axis_blocks[-1]
+
+        self._build_partition()
+
+        self.include_partitioning_space_coupling = include_partitioning_space_coupling
+        self.precomputed_schur = precompute_schur
+        if self.precomputed_schur:
+            # Always precompute S-space
+            self.S_precomputed_S_1 = self._compute_schur_for_space(self.axis_blocks[0])
+
+            # Optionally precompute D1-space (only low-energy amplitudes)
+            if self.include_partitioning_space_coupling:
+                self.S_precomputed_2 = self._compute_schur_for_space(
+                    self.partitioning_space, use_idx=self.idx1
+                )
+
+        self.lhs_complementary_blocks = {k: v for k, v in self.blocks.items() if k.split("_")[1] == self.partitioning_space}
+        self.rhs_complementary_blocks = {k: v for k, v in self.blocks.items() if k.split("_")[0] == self.partitioning_space}
+        # Further approximation: Neglect M_D1D2 coupling
+        # Easier to implement for now
+        # self.rhs_complementary_blocks = {f"{self.axis_blocks[0]}_{self.partitioning_space}": self.blocks[f"{self.axis_blocks[0]}_{self.partitioning_space}"]}
+        # self.lhs_complementary_blocks = {f"{self.partitioning_space}_{self.axis_blocks[0]}": self.blocks[f"{self.partitioning_space}_{self.axis_blocks[0]}"]}
+
+    # ---------------------------------------------------------
+
+    def _build_partition(self):
+        """Split partioning space configurations into low/high energy"""
+
+        diag = super().diagonal().get(self.partitioning_space).to_ndarray()
+        print(diag.max())
+
+        self.mask_low = diag <= self.energy_cutoff
+        self.mask_high = ~self.mask_low
+
+        self.idx1 = np.argwhere(self.mask_low)   # low-energy D1
+        self.idx2 = np.argwhere(self.mask_high)  # high-energy D2
+
+        print(f"Treating {len(self.idx2)} out of {len(self.idx1) + len(self.idx2)} double configurations implicitly and approximately.")
+        print(f"Number of single configurations remain unchanged: {self.axis_lengths[self.axis_blocks[0]]}")
+        print(f"Number of explicit double configurations: {len(self.idx1)} ({len(self.idx1)/(len(self.idx1) + len(self.idx2))})")
+
+
+        self.diag2 = diag * self.mask_high        # D2 diagonal
+        self.n1 = len(self.idx1)
+        self.n2 = len(self.idx2)
+
+    # ---------------------------------------------------------
+
+    def _expand_d1(self, v1):
+        """
+        Embed D1 vector into full doubles vector
+        """
+        full = np.zeros(self.axis_lengths[self.partitioning_space])
+        full[self.idx1] = v1
+        return AmplitudeVector(**{self.partitioning_space: full})
+
+    # ---------------------------------------------------------
+
+    def _expand_d2(self, v2):
+        """
+        Embed D2 vector into full doubles vector
+        """
+        full = np.zeros(self.axis_lengths[self.partitioning_space])
+        full[self.idx2] = v2
+        return AmplitudeVector(**{self.partitioning_space: full})
+
+    # ---------------------------------------------------------
+
+    def diagonal(self):
+        """
+        Reduced diagonal used for Davidson preconditioning.
+        """
+
+        return super().diagonal()
+        # return AmplitudeVector(
+        #     **{self.axis_blocks[0]: diag.get(self.axis_blocks[0])},
+        #     **{self.partitioning_space: diag.get(self.axis_blocks[1]).to_ndarray()[self.idx1]}
+        # )
+
+    # ---------------------------------------------------------
+
+    @timed_member_call()
+    def _compute_schur_for_space(self, target_space, use_idx=None):
+        """
+        Compute Schur complement for a given target space in a fully vectorized way:
+
+            S_target = (M_target,D2) @ (w - M_D2D2)^(-1) @ (M_D2,target)
+
+        Parameters
+        ----------
+        target_space : str
+            Either S-space ('ph') or partitioning_space (D1-space)
+        use_idx : array-like, optional
+            Indices of the target subspace to consider (for D1).
+            If None, all entries in target_space are used.
+
+        Returns
+        -------
+        S_mat : ndarray
+            Dense matrix acting on target amplitudes.
+        """
+        # Determine target indices
+        if use_idx is None:
+            idx_target = np.arange(self.axis_lengths[target_space])
+        else:
+            idx_target = use_idx
+        n_target = len(idx_target)
+        n2 = self.n2
+
+        # Precompute inverse of (w - diag2)
+        inv_d2 = 1.0 / (self.w - self.diag2)
+
+        # Create full D2 identity (unit vectors in columns)
+        V2 = np.eye(n2)  # shape (n2, n2)
+
+        # Wrap each column into full D2 AmplitudeVector
+        ampl_v2_list = [self._expand_d2(V2[:, i2]) for i2 in range(n2)]
+
+        # Apply RHS complementary blocks to each vector (vectorized via list comprehension)
+        res_list = [
+            sum(block(av2) for block in self.blocks.values()
+                if block.name.split("_")[1] == target_space)
+            for av2 in ampl_v2_list
+        ]
+
+        # Stack responses into array: shape (total_target_space, n2)
+        res_full = np.column_stack([r.get(target_space) for r in res_list])
+
+        # Scale by inverse diagonal (broadcast)
+        res_full *= inv_d2
+
+        # Extract only the target indices to form final Schur matrix
+        S_mat = res_full[idx_target, :]
+
+        return S_mat
+
+    # ---------------------------------------------------------
+
+    @timed_member_call()
+    def matvec(self, v):
+        """
+        Matrix-vector product using Schur complement.
+        v is a full AmplitudeVector (singles + doubles), but only low-energy D1 amplitudes
+        are active for the partitioning space.
+        """
+        self.w = 0.15
+        # -------------------------------------------------
+        # Step 1: Standard ADC blocks (acting on full v)
+        # -------------------------------------------------
+        res = sum(block(v) for block in self.blocks.values())
+
+        # Keep only D1 contributions in partitioning space
+        res_pphh = res.pphh.to_ndarray()
+        res_pphh *= self.mask_low
+        res.pphh.set_from_ndarray(res_pphh)
+
+        # -------------------------------------------------
+        # Step 2: Construct RHS for D2 space
+        # -------------------------------------------------
+        v22 = sum(block(v) for block in self.rhs_complementary_blocks.values())
+
+        # Only D2 components matter here
+        v22_pphh = v22.pphh.to_ndarray()
+        v22_pphh *= self.mask_high
+
+        # Apply inverse diagonal: (w - M_D2D2)^(-1)
+        diag_D = super().diagonal().get(self.partitioning_space).to_ndarray()
+        diag_D2 = diag_D[self.mask_high]  # only D2
+        v22_pphh[self.mask_high] /= (self.w - diag_D2)
+        tmp = v.zeros_like()
+        tmp.pphh.set_from_ndarray(v22_pphh)
+        tmp = self.blocks["pphh_pphh"](tmp)
+        tmp_pphh = tmp.pphh.to_ndarray()
+        tmp_pphh -= tmp_pphh * diag_D
+        tmp_pphh *= self.mask_high
+        tmp_pphh[self.mask_high] /= (self.w - diag_D2)
+        v22_pphh -= tmp_pphh
+
+        # Wrap back into AmplitudeVector
+        v2 = v.zeros_like()
+        v2.pphh.set_from_ndarray(v22_pphh)
+
+        # -------------------------------------------------
+        # Step 3: Apply complementary blocks to D2 response
+        # -------------------------------------------------
+        v22_out = sum(block(v2) for block in self.lhs_complementary_blocks.values())
+
+        # Keep only D2 contributions
+        v22_out_pphh = v22_out.pphh.to_ndarray()
+        v22_out_pphh *= self.mask_low
+
+        v3 = v.zeros_like()
+        v3.ph = v22_out.ph
+        v3.pphh.set_from_ndarray(v22_out_pphh)
+
+        # -------------------------------------------------
+        # Step 4: Combine
+        # -------------------------------------------------
+        return res + v3
+
+    # ---------------------------------------------------------
+
+    def __matmul__(self, other):
+        if isinstance(other, AmplitudeVector):
+            return self.matvec(other)
+        if isinstance(other, list):
+            if all(isinstance(elem, AmplitudeVector) for elem in other):
+                return [self.matvec(ov) for ov in other]
+        return NotImplemented
+
+    def rmatvec(self, v):
+        return self.matvec(v)
+
+    def __len__(self):
+        return self.axis_lengths["ph"] + self.n1

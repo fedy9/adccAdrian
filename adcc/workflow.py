@@ -31,7 +31,7 @@ from . import solver
 from .guess import (determine_spin_change, estimate_n_guesses,
                     guesses_from_diagonal, get_spin_block_symmetrisation)
 from .LazyMp import LazyMp
-from .AdcMatrix import AdcMatrix, AdcMatrixlike, AdcExtraTerm
+from .AdcMatrix import AdcMatrix, AdcMatrixlike, AdcExtraTerm, AdcMatrixSchur
 from .AdcMethod import AdcMethod
 from .AmplitudeVector import AmplitudeVector
 from .exceptions import InputError
@@ -52,6 +52,7 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
             frozen_core=None, frozen_virtual=None, method=None,
             n_singlets=None, n_doublets=None, n_triplets=None,
             n_spin_flip=None, is_alpha=None, environment=None,
+            repartitioning=False, repartitioning_cutoff_ev=0,
             **solverargs):
     """Run an ADC calculation.
 
@@ -215,13 +216,15 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
 """
     matrix = construct_adcmatrix(
         data_or_matrix, core_orbitals=core_orbitals, frozen_core=frozen_core,
-        frozen_virtual=frozen_virtual, method=method)
+        frozen_virtual=frozen_virtual, method=method,
+        repartitioning=repartitioning,
+        repartitioning_cutoff_ev=repartitioning_cutoff_ev)
 
     n_states, kind, is_alpha = validate_state_parameters(
         matrix, n_states=n_states, n_singlets=n_singlets,
         n_doublets=n_doublets, n_triplets=n_triplets, n_spin_flip=n_spin_flip,
         kind=kind, is_alpha=is_alpha)
-    
+
     # Setup environment coupling terms and energy corrections
     env_matrix_term, env_energy_corrections = setup_environment(matrix,
                                                                 environment)
@@ -229,7 +232,7 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
     if env_matrix_term:
         matrix += env_matrix_term
 
-    # Construct guesses and determine spin_change 
+    # Construct guesses and determine spin_change
     if guesses is None:
         spin_change = determine_spin_change(matrix.method, kind, is_alpha)
         guesses = construct_guesses(
@@ -277,7 +280,8 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
 # Individual steps
 #
 def construct_adcmatrix(data_or_matrix, core_orbitals=None, frozen_core=None,
-                        frozen_virtual=None, method=None):
+                        frozen_virtual=None, method=None, repartitioning=False,
+                        repartitioning_cutoff_ev=0):
     """
     Use the provided data or AdcMatrix object to check consistency of the
     other passed parameters and construct the AdcMatrix object representing
@@ -329,6 +333,11 @@ def construct_adcmatrix(data_or_matrix, core_orbitals=None, frozen_core=None,
     # Make AdcMatrix (if not done)
     if isinstance(data_or_matrix, (ReferenceState, LazyMp)):
         try:
+            if repartitioning:
+                return AdcMatrixSchur(
+                    method, data_or_matrix,
+                    energy_cutoff_ev=repartitioning_cutoff_ev
+                )
             return AdcMatrix(method, data_or_matrix)
         except ValueError as e:
             # In case of an issue with CVS <-> chosen spaces
@@ -514,7 +523,7 @@ def construct_guesses(
     return obtain_guesses_by_inspection(
         matrix, n_guesses, kind, n_guesses_doubles, is_alpha, spin_change
     )
-    
+
 
 def diagonalise_adcmatrix(matrix, n_states, guesses, kind="any", conv_tol=None,
                           eigensolver="davidson", output=sys.stdout,
