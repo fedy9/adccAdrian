@@ -836,17 +836,29 @@ class AdcMatrixSchur(AdcMatrix):
         """Split partioning space configurations into low/high energy"""
 
         diag = super().diagonal().get(self.partitioning_space).to_ndarray()
-        print(diag.max())
 
         self.mask_low = diag <= self.energy_cutoff
         self.mask_high = ~self.mask_low
 
-        self.idx1 = np.argwhere(self.mask_low)   # low-energy D1
+        idx_low = np.argwhere(self.mask_low)   # low-energy D1
         self.idx2 = np.argwhere(self.mask_high)  # high-energy D2
+
+        # Reduce redundant and "forbidden" configurations
+        self.mask_low_unique = (idx_low[:,1] > idx_low[:,0]) & (idx_low[:,3] > idx_low[:,2])
+        self.idx1 = idx_low[self.mask_low_unique]
+
+        pairs_ij = np.unique(self.idx1[:, [0,1]], axis=0)
+        pairs_ia = np.unique(self.idx1[:, [0,2]], axis=0)
+        pairs_ab = np.unique(self.idx1[:, [2,3]], axis=0)
 
         print(f"Treating {len(self.idx2)} out of {len(self.idx1) + len(self.idx2)} double configurations implicitly and approximately.")
         print(f"Number of single configurations remain unchanged: {self.axis_lengths[self.axis_blocks[0]]}")
         print(f"Number of explicit double configurations: {len(self.idx1)} ({len(self.idx1)/(len(self.idx1) + len(self.idx2))})")
+        print(len(np.argwhere(self.mask_low_unique)))
+        print(len(pairs_ij))
+        print(len(pairs_ia))
+        print(len(pairs_ab))
+        exit()
 
 
         self.diag2 = diag * self.mask_high        # D2 diagonal
@@ -976,14 +988,15 @@ class AdcMatrixSchur(AdcMatrix):
         diag_D = super().diagonal().get(self.partitioning_space).to_ndarray()
         diag_D2 = diag_D[self.mask_high]  # only D2
         v22_pphh[self.mask_high] /= (self.w - diag_D2)
-        tmp = v.zeros_like()
-        tmp.pphh.set_from_ndarray(v22_pphh)
-        tmp = self.blocks["pphh_pphh"](tmp)
-        tmp_pphh = tmp.pphh.to_ndarray()
-        tmp_pphh -= tmp_pphh * diag_D
-        tmp_pphh *= self.mask_high
-        tmp_pphh[self.mask_high] /= (self.w - diag_D2)
-        v22_pphh -= tmp_pphh
+        # tmp = v.zeros_like()
+        # tmp.pphh.set_from_ndarray(v22_pphh)
+        # tmp = self.blocks["pphh_pphh"](tmp)
+        # tmp_pphh = tmp.pphh.to_ndarray()
+        # tmp_pphh -= tmp_pphh * diag_D
+
+        # tmp_pphh *= self.mask_high
+        # tmp_pphh[self.mask_high] /= (self.w - diag_D2)
+        # v22_pphh -= tmp_pphh
 
         # Wrap back into AmplitudeVector
         v2 = v.zeros_like()
