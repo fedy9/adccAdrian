@@ -557,6 +557,9 @@ def diagonalise_adcmatrix(matrix, n_states, guesses, kind="any", conv_tol=None,
         explicit_symmetrisation = IndexSpinSymmetrisation(
             matrix, enforce_spin_kind=kind
         )
+    # TODO: make proper
+    matrix.explicit_symmetrisation = explicit_symmetrisation
+    matrix.intermediates.explicit_symmetrisation = explicit_symmetrisation
 
     # Set some solver-specific parameters
     if eigensolver == "davidson":
