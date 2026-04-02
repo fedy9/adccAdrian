@@ -64,7 +64,7 @@ __all__ = ["run_adc", "InputError", "AdcMatrix",
            "linear_combination", "zeros_like", "direct_sum",
            "memory_pool", "set_n_threads", "get_n_threads", "AmplitudeVector",
            "HartreeFockProvider", "ExcitedStates", "State2States",
-           "ChargedExcitation", "DetachedStates", "AttachedStates"
+           "ChargedExcitation", "DetachedStates", "AttachedStates",
            "Excitation", "ElectronicTransition", "Tensor", "DictHfProvider",
            "DataHfProvider", "OneParticleOperator", "OneParticleDensity",
            "TwoParticleOperator", "TwoParticleDensity", "OperatorSymmetry",
@@ -121,6 +121,11 @@ def adc2x(*args, **kwargs):
 @with_runadc_doc
 def adc3(*args, **kwargs):
     return run_adc(*args, **kwargs, method="adc3")
+
+
+@with_runadc_doc
+def adc3d(*args, **kwargs):
+    return run_adc(*args, **kwargs, method="adc3d")
 
 
 @with_runadc_doc

@@ -196,6 +196,13 @@ def block_pphh_pphh_1(hf, mp, intermediates):
     return AdcBlock(apply, diagonal_pphh_pphh_1(hf))
 
 
+def block_pphh_pphh_1d(hf, mp, intermediates):
+    def apply(ampl):
+        res = AmplitudeVector(pphh=ampl.pphh * intermediates.adc3d_d2)
+        return intermediates.explicit_symmetrisation.symmetrise(res)
+    return AdcBlock(apply, diagonal_pphh_pphh_1(hf))
+
+
 def block_cvs_pphh_pphh_1(hf, mp, intermediates):
     def apply(ampl):
         return AmplitudeVector(pphh=(
