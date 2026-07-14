@@ -686,7 +686,7 @@ class AdcMatrixProjected(AdcMatrix):
 
 class ComplementaryBlockInverterNeumann:
     """
-    Approximate application of (M_compl - omega I)^(-1) via a truncated 
+    Approximate application of (M_compl - omega I)^(-1) via a truncated
     Neumann expansion using either:
 
     A)  A = D + V,   A^{-1} ≈ D^{-1} Σ_k (-D^{-1} V)^k
@@ -744,21 +744,21 @@ class ComplementaryBlockInverterNeumann:
 
         term = (v / D_shifted).evaluate()
         # TODO: forward explicit_symmetrisation in workflow
-        if self.explicit_symmetrisation:
-            self.explicit_symmetrisation.symmetrise(term)
+        # if self.explicit_symmetrisation:
+        #     self.explicit_symmetrisation.symmetrise(term)
         res = term.copy()
 
         for k in range(order):
             # -(D^{-1} V) term
-            term = (-1.0 * self.apply_V(term) / D_shifted).evaluate()
-            if self.explicit_symmetrisation:
-                self.explicit_symmetrisation.symmetrise(term)
+            term = (self.apply_V(term) / D_shifted).evaluate()
+            # if self.explicit_symmetrisation:
+            #     self.explicit_symmetrisation.symmetrise(term)
             res += term
 
         return res
 
     # ---------------------------------------------------------------
-    # Method B: Automatic α chooser 
+    # Method B: Automatic α chooser
     # ---------------------------------------------------------------
     def choose_alpha(self, D_shifted, safety_factor=1.2):
         """
@@ -781,7 +781,7 @@ class ComplementaryBlockInverterNeumann:
             return alpha * v - self.apply_A(v, omega)
 
         inv_alpha = 1.0 / alpha
-        
+
         term = v.copy()
         res = v.copy()
 
@@ -800,7 +800,8 @@ class ComplementaryBlockInverterNeumann:
         """
 
         # Shifted Diagonal of M
-        D_shifted = self.M_full.diagonal()[self.space] - omega
+        # D_shifted = self.M_full.diagonal()[self.space] - omega
+        D_shifted = -1.0 * (self.M_full.diagonal()[self.space] - omega)
 
         # ---------- METHOD A ----------
         if not self.use_scaled:
@@ -909,16 +910,16 @@ class FoldedAdcMatrix(AdcMatrix):
 
         if (len(self.complementary_coupling_blocks_left) != len(
                                     self.complementary_coupling_blocks_right)):
-            raise ValueError(f"""There have to be the same number of coupling 
-                blocks: {self.complementary_coupling_blocks_left.keys()} != 
+            raise ValueError(f"""There have to be the same number of coupling
+                blocks: {self.complementary_coupling_blocks_left.keys()} !=
                 {self.complementary_coupling_blocks_left.keys()}""")
 
         if len(self.complementary_block) == 0:
             raise ValueError("No complementary block.")
-        
+
         if len(self.complementary_block) > 1:
             raise NotImplementedError("Downfolding only implemented for a single block.")
-        
+
         # If diagonal (order == 0) then exact inversion; otherwise allow Neumann
         if compl_block_order == 0:
             if neumann_order >= 0:
@@ -949,7 +950,7 @@ class FoldedAdcMatrix(AdcMatrix):
     def matvec(self, v):
         """
         Compute the downfolded ADC effective matrix acting on a vector `v`.
-        
+
         Parameters
         ----------
         v : AmplitudeVector or Tensor
@@ -970,12 +971,40 @@ class FoldedAdcMatrix(AdcMatrix):
         if self.compl_solver is None:
             v_compl = -1.0 * v_compl / (self.unfolded_diagonal()[self.complementary_space] - self.omega).evaluate()
         else:
-            v_compl = -1.0 * self.compl_solver.apply(v_compl, self.omega)
+            # v_compl = -1.0 * self.compl_solver.apply(v_compl, self.omega)
+            v_compl = self.compl_solver.apply(v_compl, self.omega)
 
         # 4) Apply right coupling blocks to project back into active space
         res += sum(block(v_compl) for block in self.complementary_coupling_blocks_right.values())
 
         return res
+
+    @timed_member_call()
+    def compute_complement(self, v, omega):
+        """
+        Compute the downfolded ADC effective matrix acting on a vector `v`.
+
+        Parameters
+        ----------
+        v : AmplitudeVector or Tensor
+            Vector in the downfolded (active) space.
+
+        Returns
+        -------
+        AmplitudeVector
+            Result of M_eff @ v in the active space.
+        """
+        # 1) Apply left coupling blocks to project into complementary space
+        v_compl = sum(block(v) for block in self.complementary_coupling_blocks_left.values())
+
+        # 2) Apply (M_compl - omega)^{-1} v_compl
+        if self.compl_solver is None:
+            v_compl = -1.0 * v_compl / (self.unfolded_diagonal()[self.complementary_space] - self.omega).evaluate()
+        else:
+            # v_compl = -1.0 * self.compl_solver.apply(v_compl, self.omega)
+            v_compl = self.compl_solver.apply(v_compl, self.omega)
+
+        return v_compl
 
     def update_omega(self, new_omega: float):
         self.omega = new_omega

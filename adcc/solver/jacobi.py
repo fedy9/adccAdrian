@@ -170,6 +170,10 @@ def jacobi_solver(matrix, guesses, n_ep=None, max_subspace=None,
                 soltime = state.timer.total("iteration")
                 print("    Total solver time:          ", strtime(soltime))
                 results.eigenvalues.append(state.eigenvalue)
+                # Recompute doubles part
+                state.eigenvector = AmplitudeVector(ph=state.eigenvector.ph, pphh=matrix.compute_complement(state.eigenvector, state.eigenvalue).pphh)
+                renorm_factor = np.sqrt(state.eigenvector @ state.eigenvector)
+                state.eigenvector = 1/renorm_factor * state.eigenvector
                 results.eigenvectors.append(state.eigenvector)
                 results.residual_norms.append(state.residual)
                 results.converged = True
