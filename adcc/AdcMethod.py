@@ -293,7 +293,7 @@ class AdcMethod(Method):
             gs_type=GroundStateType.MP,
             cvs=False
         ): LevelSpec(
-            max_level=3,
+            max_level=4,
             special_levels=(MethodLevel.TWO_X, MethodLevel.TWO_X_DIA,
                            MethodLevel.THREE_DIA)
         ),

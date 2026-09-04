@@ -79,7 +79,7 @@ def davidson_iterations(matrix, state, max_subspace, max_iter, n_ep, n_block,
                         is_converged, which, callback=None, preconditioner=None,
                         preconditioning_method="Davidson", debug_checks=False,
                         residual_min_norm=None, explicit_symmetrisation=None,
-                        kind="any", max_subspace_iter=None):
+                        max_subspace_iter=None):
     """Drive the davidson iterations
 
     Parameters
@@ -120,8 +120,6 @@ def davidson_iterations(matrix, state, max_subspace, max_iter, n_ep, n_block,
         Explicit symmetrisation to apply to new subspace vectors before
         adding them to the subspace. Allows to correct for loss of index
         or spin symmetries (type or instance)
-    kind : str, optional
-        Spin kind of the target states
     max_subspace_iter : int, optional
         Maximum number of iterations for diagonalizing the subspace matrix
     """
@@ -164,11 +162,6 @@ def davidson_iterations(matrix, state, max_subspace, max_iter, n_ep, n_block,
         # Initial application of A to the subspace
         Ax = evaluate(matrix @ SS)
         state.n_applies += n_ss_vec
-        # Special handling for singlet states with the diagonal approximation
-        # of the first order pphh_pphh block
-        if matrix.method.level.to_str().endswith("D"):
-            if kind == "singlet":
-                explicit_symmetrisation.symmetrise(Ax)
 
     # Get the worksize view for the first iteration
     Ass = Ass_cont[:n_ss_vec, :n_ss_vec]
@@ -342,11 +335,6 @@ def davidson_iterations(matrix, state, max_subspace, max_iter, n_ep, n_block,
         with state.timer.record("projection"):
             Ax.extend(matrix @ SS[-n_ss_added:])
             state.n_applies += n_ss_added
-            # Special handling for singlet states with the diagonal approximation
-            # of the first order pphh_pphh block
-            if matrix.method.level.to_str().endswith("D"):
-                if kind == "singlet":
-                    explicit_symmetrisation.symmetrise(Ax[n_ss_vec - n_ss_added:])
 
         # Update the worksize view for the next iteration
         Ass = Ass_cont[:n_ss_vec, :n_ss_vec]
@@ -367,7 +355,7 @@ def eigsh(matrix, guesses, n_ep=None, n_block=None, max_subspace=None,
           callback=None, preconditioner=None,
           preconditioning_method="Davidson", debug_checks=False,
           residual_min_norm=None, explicit_symmetrisation=IndexSymmetrisation,
-          kind="any", max_subspace_iter=None):
+          max_subspace_iter=None):
     """Davidson eigensolver for ADC problems
 
     Parameters
@@ -412,8 +400,6 @@ def eigsh(matrix, guesses, n_ep=None, n_block=None, max_subspace=None,
         Explicit symmetrisation to apply to new subspace vectors before
         adding them to the subspace. Allows to correct for loss of index
         or spin symmetries (type or instance)
-    kind : str, optional
-        Spin kind of the target states
     max_subspace_iter : int, optional
         Maximum number of iterations for diagonalizing the subspace matrix
     """
@@ -478,7 +464,6 @@ def eigsh(matrix, guesses, n_ep=None, n_block=None, max_subspace=None,
                         debug_checks=debug_checks,
                         residual_min_norm=residual_min_norm,
                         explicit_symmetrisation=explicit_symmetrisation,
-                        kind=kind,
                         max_subspace_iter=max_subspace_iter)
     return state
 

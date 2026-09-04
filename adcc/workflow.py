@@ -379,7 +379,12 @@ def diagonalise_adcmatrix(matrix, n_states, kind, eigensolver="davidson",
 
     # Determine explicit_symmetrisation
     explicit_symmetrisation = IndexSymmetrisation
-    if kind in ["singlet", "triplet"]:
+    if kind == "singlet":
+        if not matrix.method.level.to_str().endswith("D"):
+            explicit_symmetrisation = IndexSpinSymmetrisation(
+                matrix, enforce_spin_kind=kind
+            )
+    elif kind == "triplet":
         explicit_symmetrisation = IndexSpinSymmetrisation(
             matrix, enforce_spin_kind=kind
         )
@@ -428,7 +433,6 @@ def diagonalise_adcmatrix(matrix, n_states, kind, eigensolver="davidson",
     return run_eigensolver(matrix, guesses, n_ep=n_states, conv_tol=conv_tol,
                            callback=callback,
                            explicit_symmetrisation=explicit_symmetrisation,
-                           kind=kind,
                            **solverargs)
 
 

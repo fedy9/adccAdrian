@@ -255,7 +255,7 @@ def lanczos(matrix, guesses, n_ep, max_subspace=None,
             conv_tol=1e-9, which="LM", max_iter=100,
             callback=None, debug_checks=False,
             explicit_symmetrisation=IndexSymmetrisation,
-            kind="any", min_subspace=None):
+            min_subspace=None):
     """Lanczos eigensolver for ADC problems
 
     Parameters
@@ -284,8 +284,6 @@ def lanczos(matrix, guesses, n_ep, max_subspace=None,
         Explicit symmetrisation to use after orthogonalising the
         subspace vectors. Allows to correct for loss of index or spin
         symmetries during orthogonalisation (type or instance).
-    kind : str, optional
-        Spin kind of the target states
     min_subspace : int or NoneType, optional
         Subspace size to collapse to when performing a thick restart.
     """
