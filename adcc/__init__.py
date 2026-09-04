@@ -151,6 +151,16 @@ def cvs_adc2x(*args, **kwargs):
 
 
 @with_runadc_doc
+def cvs_adc2xd(*args, **kwargs):
+    return run_adc(*args, **kwargs, method="cvs-adc2xD")
+
+
+@with_runadc_doc
+def cvs_adc3d(*args, **kwargs):
+    return run_adc(*args, **kwargs, method="cvs-adc3D")
+
+
+@with_runadc_doc
 def cvs_adc3(*args, **kwargs):
     return run_adc(*args, **kwargs, method="cvs-adc3")
 
