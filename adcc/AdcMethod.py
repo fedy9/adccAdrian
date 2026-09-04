@@ -40,6 +40,8 @@ class MethodLevel(Enum):
 
     # special levels
     TWO_X = "2x"    # extended 2nd-order ADC: 2p2h-2p2h in 1st order
+    TWO_X_DIA = "2xD" # diagonal approx. of ADC(3)'s pphh-pphh block
+    THREE_DIA = "3D" # diagonal approx. of ADC(2)-x's pphh-pphh block
     # 1st-order ISR: in singles excitation space only (starting from 1-particle
     # operators, doubles are required for a consistent first-order description)
     ONE_S = "1s"
@@ -291,7 +293,7 @@ class AdcMethod(Method):
             gs_type=GroundStateType.MP,
             cvs=False
         ): LevelSpec(
-            max_level=4,
+            max_level=3,
             special_levels=(MethodLevel.TWO_X,)
         ),
         LevelKey(
@@ -301,6 +303,38 @@ class AdcMethod(Method):
         ): LevelSpec(
             max_level=3,
             special_levels=(MethodLevel.TWO_X,)
+        ),
+        LevelKey(
+            adc_type=AdcType.PP,
+            gs_type=GroundStateType.MP,
+            cvs=False
+        ): LevelSpec(
+            max_level=3,
+            special_levels=(MethodLevel.TWO_X_DIA,)
+        ),
+        LevelKey(
+            adc_type=AdcType.PP,
+            gs_type=GroundStateType.MP,
+            cvs=True
+        ): LevelSpec(
+            max_level=3,
+            special_levels=(MethodLevel.TWO_X_DIA,)
+        ),
+        LevelKey(
+            adc_type=AdcType.PP,
+            gs_type=GroundStateType.MP,
+            cvs=False
+        ): LevelSpec(
+            max_level=3,
+            special_levels=(MethodLevel.THREE_DIA,)
+        ),
+        LevelKey(
+            adc_type=AdcType.PP,
+            gs_type=GroundStateType.MP,
+            cvs=True
+        ): LevelSpec(
+            max_level=3,
+            special_levels=(MethodLevel.THREE_DIA,)
         )
     }
 

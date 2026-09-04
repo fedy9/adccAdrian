@@ -428,6 +428,7 @@ def diagonalise_adcmatrix(matrix, n_states, kind, eigensolver="davidson",
     return run_eigensolver(matrix, guesses, n_ep=n_states, conv_tol=conv_tol,
                            callback=callback,
                            explicit_symmetrisation=explicit_symmetrisation,
+                           kind=kind,
                            **solverargs)
 
 

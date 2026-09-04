@@ -112,8 +112,17 @@ def adc2x(*args, **kwargs):
 
 
 @with_runadc_doc
+def adc2xd(*args, **kwargs):
+    return run_adc(*args, **kwargs, method="adc2xD")
+
+@with_runadc_doc
 def adc3(*args, **kwargs):
     return run_adc(*args, **kwargs, method="adc3")
+
+
+@with_runadc_doc
+def adc3d(*args, **kwargs):
+    return run_adc(*args, **kwargs, method="adc3D")
 
 
 @with_runadc_doc

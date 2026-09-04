@@ -86,9 +86,11 @@ class ElectronicStates:
         if property_method is None and hasattr(data, '_property_method'):
             property_method = data._property_method
         if property_method is None:
-            if self.method.level in [MethodLevel.TWO_X, MethodLevel.THREE,
+            if self.method.level in [MethodLevel.TWO_X, MethodLevel.TWO_X_DIA,
+                                     MethodLevel.THREE, MethodLevel.THREE_DIA,
                                      MethodLevel.FOUR]:
-                # Auto-select ISR(2) properties for ADC(2)-x and ADC(3) calc
+                # Auto-select ISR(2) properties for ADC(2)-x, ADC(2)-xD,
+                # ADC(3), ADC(3)-D, and ADC(4) calc
                 warnings.warn(f"ISR({self.method.level.to_str()}) not implemented."
                               f" Property method is selected as ISR(2).")
                 property_method = self.method.as_method_at_level(IsrMethod, 2)

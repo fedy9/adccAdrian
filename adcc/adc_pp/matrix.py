@@ -246,6 +246,13 @@ def block_pphh_pphh_1(hf, mp, intermediates):
     return AdcBlock(apply, diagonal_pphh_pphh_1(hf))
 
 
+def block_pphh_pphh_1d(hf, mp, intermediates):
+    d2 = diagonal_pphh_pphh_1(hf)
+    def apply(ampl):
+        return AmplitudeVector(pphh=ampl.pphh * d2.pphh)
+    return AdcBlock(apply, d2)
+
+
 def block_cvs_pphh_pphh_1(hf, mp, intermediates):
     def apply(ampl):
         return AmplitudeVector(pphh=(
@@ -262,6 +269,13 @@ def block_cvs_pphh_pphh_1(hf, mp, intermediates):
             + 0.5 * einsum("iJcd,abcd->iJab", ampl.pphh, hf.vvvv)
         ))
     return AdcBlock(apply, diagonal_pphh_pphh_1(hf))
+
+
+def block_cvs_pphh_pphh_1d(hf, mp, intermediates):
+    d2 = diagonal_pphh_pphh_1(hf)
+    def apply(ampl):
+        return AmplitudeVector(pphh=ampl.pphh * d2.pphh)
+    return AdcBlock(apply, d2)
 
 
 #
