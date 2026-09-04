@@ -142,11 +142,16 @@ get_refshasum () {
 }
 # download all given files from the server
 download () {
-    if which wget &> /dev/null; then
-        wget -w 0.5 -q --show-progress --no-check-certificate $@
+    if command -v wget >/dev/null 2>&1; then
+        wget -w 0.5 -q --show-progress --no-check-certificate "$@"
+    # For MacOS
+    elif command -v curl >/dev/null 2>&1; then
+        for url in "$@"; do
+            curl -k -fL --retry 3 -O "$url"
+        done
     else
-        echo "wget not installed" >&2
-        kill -s TERM $SCRIPT_PID
+        echo "Neither wget nor curl is installed" >&2
+        kill -s TERM "$SCRIPT_PID"
     fi
 }
 
