@@ -294,7 +294,8 @@ class AdcMethod(Method):
             cvs=False
         ): LevelSpec(
             max_level=3,
-            special_levels=(MethodLevel.TWO_X,)
+            special_levels=(MethodLevel.TWO_X, MethodLevel.TWO_X_DIA,
+                           MethodLevel.THREE_DIA)
         ),
         LevelKey(
             adc_type=AdcType.PP,
@@ -302,39 +303,8 @@ class AdcMethod(Method):
             cvs=True
         ): LevelSpec(
             max_level=3,
-            special_levels=(MethodLevel.TWO_X,)
-        ),
-        LevelKey(
-            adc_type=AdcType.PP,
-            gs_type=GroundStateType.MP,
-            cvs=False
-        ): LevelSpec(
-            max_level=3,
-            special_levels=(MethodLevel.TWO_X_DIA,)
-        ),
-        LevelKey(
-            adc_type=AdcType.PP,
-            gs_type=GroundStateType.MP,
-            cvs=True
-        ): LevelSpec(
-            max_level=3,
-            special_levels=(MethodLevel.TWO_X_DIA,)
-        ),
-        LevelKey(
-            adc_type=AdcType.PP,
-            gs_type=GroundStateType.MP,
-            cvs=False
-        ): LevelSpec(
-            max_level=3,
-            special_levels=(MethodLevel.THREE_DIA,)
-        ),
-        LevelKey(
-            adc_type=AdcType.PP,
-            gs_type=GroundStateType.MP,
-            cvs=True
-        ): LevelSpec(
-            max_level=3,
-            special_levels=(MethodLevel.THREE_DIA,)
+            special_levels=(MethodLevel.TWO_X, MethodLevel.TWO_X_DIA,
+                           MethodLevel.THREE_DIA)
         )
     }
 
