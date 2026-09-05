@@ -787,45 +787,52 @@ class RelinearizedAdcMatrix(AdcMatrix):
     """
     Relinearized ("folded"/"downfolded") ADC matrix: the self-coupling of
     one excitation space (the "complementary" space, e.g. "pphh") is
-    partitioned by energy into up to three windows, following the general
-    amplitude-elimination ("relinearization") scheme also used to derive
-    e.g. CC2/CC3 from a higher-order theory:
+    partitioned into an arbitrary number of windows.
+    The windows are, in order:
 
-    - window 1 (0-cutoff1): kept as explicit unknowns, coupled to the rest
-      of the matrix via the real, unapproximated complementary block.
-    - window 2 (cutoff1-cutoff2): eliminated ("folded" into the remaining
-      spaces) using a truncated Neumann series of order `neumann_order`
-      (default 1) for the inverse of (omega_fixed - A_QQ).
-    - window 3 (above cutoff2): eliminated at 0th order only (a plain
-      diagonal divide).
+    - an optional "explicit" window, kept as genuine explicit unknowns,
+      coupled to the rest of the matrix via the real, unapproximated
+      complementary block;
+    - zero or more windows eliminated ("folded" into the remaining
+      spaces), each via a truncated Neumann series of its own order for
+      the inverse of (omega_fixed - A_QQ);
+    - an implicit final window (everything not covered by the above)
+      eliminated at 0th order, i.e. a plain diagonal divide.
 
-    In both eliminated windows, A_QQ = D + V is split into the diagonal,
-    0th order (bare orbital energy) part D and the remainder V.
-    D is spin-blind by construction (it cannot distinguish e.g. an "aaaa" from
+    In every eliminated window, A_QQ = D + V is split into the diagonal,
+    0th order (bare orbital energy) part D and the remainder V. D is
+    spin-blind by construction (it cannot distinguish e.g. an "aaaa" from
     an "abab" spin-block, since orbital energies don't depend on spin for
     a restricted reference), so this split keeps the resulting
     approximation spin-pure, unlike using the diagonal of the full
-    (correlated) block would. The window boundaries are likewise defined
-    using this same 0th order diagonal, so that spin-partner
-    configurations (which necessarily share the same 0th order energy)
-    are always assigned to the same window.
+    (correlated) block would.
 
-    There is never any direct coupling between window 2 and window 3.
-    Coupling between window 1 (explicit) and the eliminated windows 2+3
-    can be included or dropped via `include_coupling`.
+    Windows are assigned via `windows`, a list of `(order, threshold)`
+    pairs, most-restrictive first: `order` is either the string
+    "explicit" (at most once, and only as the first entry) or a
+    non-negative Neumann order; `threshold` is compared against a
+    per-configuration "screening" quantity (see `screening`) to decide
+    which configurations fall into that window (see `screening` for the
+    comparison direction and required threshold ordering). Every
+    configuration not claimed by an explicit `windows` entry ends up in
+    the implicit 0th order catch-all.
+
+    There is never any direct coupling between two eliminated windows.
+    Coupling between the explicit window and the eliminated windows can
+    be included or dropped via `include_coupling`.
 
     Since this relinearization fixes `omega_fixed` once and for all, the
     resulting operator is linear and can be diagonalised with the
     ordinary Davidson/Lanczos solvers. The price is that the result may
     only be exact for `omega_fixed` equal to the true eigenvalue; for other
     choices it is an approximation whose quality improves as `omega_fixed`
-    approaches the true eigenvalue and/or as the windows are enlarged/the
-    Neumann order is increased. If the complementary block is 0th order
-    to begin with (true, in particular, for the default complementary
-    space -- i.e. the highest excitation class present -- of any
-    even-level ADC(n) method, e.g. ADC(2) or ADC(4)), V is identically
-    zero, the elimination is exact regardless of `omega_fixed` or the
-    cutoffs, and the Neumann expansion is skipped entirely.
+    approaches the true eigenvalue and/or as the windows are adjusted to
+    treat more configurations explicitly/at higher order. If the
+    complementary block is 0th order to begin with (true, in particular,
+    for the default complementary space -- i.e. the highest excitation
+    class present -- of any even-level ADC(n) method, e.g. ADC(2) or
+    ADC(4)), V is identically zero and the elimination is exact
+    regardless of `omega_fixed` or the windows.
 
     Parameters
     ----------
@@ -834,30 +841,107 @@ class RelinearizedAdcMatrix(AdcMatrix):
     omega_fixed : float
         Fixed frequency used inside the (omega_fixed - A_QQ)^{-1}
         approximation for the eliminated windows.
-    cutoff1 : float
-        Upper energy bound (in the 0th order diagonal of the
-        complementary block) of window 1 (kept explicit).
-    cutoff2 : float, optional
-        Upper energy bound of window 2 (Neumann expansion). Must be
-        >= cutoff1. Defaults to cutoff1, i.e. an empty window 2 (only
-        windows 1 and 3 are used).
+    windows : list of (str or int, float), optional
+        List of `(order, threshold)` pairs as described above, ordered
+        most- to least-restrictive. With `screening="ratio"` (default)
+        defaults to `[("explicit", 1.44), (1, 0.30)]`: configurations
+        with a size-corrected screening ratio >= 1.44 are treated
+        explicitly, those with 0.30 <= ratio < 1.44 via a 1st order
+        Neumann correction, and everything below 0.30 at 0th order. These
+        thresholds were found by jointly bisecting the shared
+        explicit/1st-order pair against the *worst-case* error across a
+        10-molecule ADC(3)/cc-pVDZ benchmark targeting 0.05 eV accuracy
+        (screening ratios already include the N**(1/6) size correction --
+        see `size_exponent`), i.e. the loosest (cheapest) thresholds for
+        which every training molecule still lands under 0.05 eV, not
+        merely a typical one. The worst case (hydrogen cyanide, closely
+        followed by acetonitrile) sits at ~46 meV; the rest have
+        substantial remaining headroom. This is a starting point based on
+        limited testing, not a rigorously tuned choice, and does not
+        (yet) account for `include_coupling=False` or non-default
+        `complementary_space` choices. With
+        `screening="energy"` defaults to `[("explicit", 1.0), (1, 2.0)]`
+        instead (no size correction applies there, and unlike the ratio
+        default this has not been benchmarked for any accuracy target).
+    screening : {"ratio", "energy"}, optional
+        How the `threshold` values in `windows` are interpreted.
+        "ratio" (default) compares `|V_diag| / |D0 - omega_fixed|` per
+        configuration -- the quantity that actually governs the
+        convergence rate of the Neumann series for that configuration --
+        multiplied by `N**size_exponent` (`N` = total number of
+        configurations in the complementary space), against strictly
+        *decreasing* thresholds (large ratio = harder, goes
+        first/explicit). This is dimensionless and transfers between
+        systems/basis sets much better than an absolute energy cutoff.
+        "energy" compares `|D0 - omega_fixed|` directly (configurations
+        close to resonance with the state being solved for are "hard",
+        exactly as for "ratio", just without the `V_diag` numerator or
+        the size correction) against strictly *increasing* thresholds
+        (small |D0 - omega_fixed| = harder, goes first/explicit),
+        reproducing a plain energy-window-around-omega partitioning.
+    size_exponent : float, optional
+        Exponent `p` in the `N**p` size correction applied to the ratio
+        screening quantity (only used when `screening="ratio"`). Neglecting
+        more configurations accumulates more error even if each
+        individual one looks equally small by the bare ratio, so the
+        *usable* (uncorrected) ratio threshold shrinks as the
+        complementary space grows; fitting this shrinkage against two
+        independent basis-set sweeps (water and methane, STO-3G through
+        cc-pVTZ, ADC(3)) gave consistent exponents of roughly -0.13
+        (explicit/1st-order boundary) to -0.19 (1st-order/0th-order
+        boundary) -- i.e. much weaker than the naive `1/sqrt(N)` a fully
+        incoherent error accumulation would suggest, consistent with only
+        a shrinking effective fraction of the nominal space actually
+        coupling non-negligibly as it grows. The default `1/6` is a shared
+        compromise between those two fitted exponents, not a separately
+        tuned value per window.
     complementary_space : str, optional
         Excitation space to relinearize. Defaults to the highest
         excitation class present in `matrix` (`matrix.axis_blocks[-1]`).
-    neumann_order : int, optional
-        Order of the Neumann expansion used for window 2 (default 1).
-        Ignored (forced to 0) if the complementary block is 0th order.
     include_coupling : bool, optional
-        Whether the explicit (window 1) part of the complementary space
-        directly couples to the eliminated (window 2+3) part via the real
-        complementary block (True, default) or whether this coupling is
-        neglected (False), i.e. window 1 only communicates with the
-        eliminated windows indirectly, via the other excitation spaces.
+        Whether the explicit window directly couples to the eliminated
+        windows via the real complementary block (True, default) or
+        whether this coupling is neglected (False), i.e. the explicit
+        window only communicates with the eliminated windows indirectly,
+        via the other excitation spaces.
     """
 
-    def __init__(self, matrix, omega_fixed, cutoff1, cutoff2=None,
-                complementary_space=None, neumann_order=1,
-                include_coupling=True):
+    # Size-corrected (screen_arr already includes the N**size_exponent
+    # factor) ratio thresholds. Jointly calibrated (not just taken
+    # per-molecule and combined afterwards) by bisecting the *shared*
+    # explicit/1st-order threshold pair against the WORST-CASE error
+    # across the same 10-molecule ADC(3)/cc-pVDZ benchmark, targeting
+    # 0.05 eV accuracy -- i.e. these are the loosest (cheapest) thresholds
+    # for which every one of the 10 training molecules still lands under
+    # 0.05 eV, not merely the typical one. The worst case (hydrogen
+    # cyanide, closely followed by acetonitrile -- both nitrile/cyano
+    # systems) lands at ~46 meV, just under target; the other 8 molecules
+    # have substantial remaining headroom (sub-10 meV). An earlier,
+    # per-molecule-then-minimum calibration gave much smaller (safer but
+    # far more conservative) thresholds of 0.76 / 0.24, which put
+    # 48-68% of configurations in the expensive explicit tier across the
+    # training set; this joint calibration reduces that to 33-43% while
+    # keeping every training molecule within tolerance. These numbers are
+    # only meaningful together with the default size_exponent=1/6 above.
+    _DEFAULT_WINDOWS_RATIO = [("explicit", 1.44), (1, 0.30)]
+    # Unscaled (screening="energy" never applies the size correction).
+    # Note the increasing order here vs. the decreasing one for ratio
+    # screening: energy screening's tier test is "<=" (small |D0-omega| =
+    # hard = explicit first), so its thresholds must increase, not
+    # decrease. 1.0/2.0 Ha here means: configurations within 1.0 Ha of
+    # omega_fixed (i.e. up to omega_fixed + 1.0 Ha, since pphh diagonal
+    # values sit above omega_fixed) are treated explicitly, within 2.0 Ha
+    # at 1st order -- unlike the ratio default, this has not been
+    # benchmarked for any particular accuracy target, and testing showed
+    # the *explicit* width matters far more than the 1st-order width here
+    # (energy screening ignores V_diag entirely, so it needs a much wider
+    # explicit net than ratio screening to catch strongly-coupled
+    # configurations that merely happen to sit further from omega_fixed).
+    _DEFAULT_WINDOWS_ENERGY = [("explicit", 1.0), (1, 2.0)]
+
+    def __init__(self, matrix, omega_fixed, windows=None,
+                screening="ratio", size_exponent=1.0 / 6,
+                complementary_space=None, include_coupling=True):
         super().__init__(matrix.method, matrix.ground_state,
                          block_orders=matrix.block_orders,
                          intermediates=matrix.intermediates)
@@ -874,12 +958,10 @@ class RelinearizedAdcMatrix(AdcMatrix):
         self.omega_fixed = omega_fixed
         self.include_coupling = include_coupling
 
-        if cutoff2 is None:
-            cutoff2 = cutoff1
-        if cutoff2 < cutoff1:
-            raise ValueError("cutoff2 needs to be >= cutoff1.")
-        self.cutoff1 = cutoff1
-        self.cutoff2 = cutoff2
+        if screening not in ("ratio", "energy"):
+            raise ValueError("screening needs to be 'ratio' or 'energy'.")
+        self.screening = screening
+        self.size_exponent = size_exponent
 
         space_space = f"{complementary_space}_{complementary_space}"
         order_used = self.block_orders.get(space_space, None)
@@ -893,22 +975,19 @@ class RelinearizedAdcMatrix(AdcMatrix):
             order=0, intermediates=self.intermediates, variant=variant
         )
         self.diagonal_0 = diagonal_0_block.diagonal
+        diag0_arr = getattr(self.diagonal_0, complementary_space).to_ndarray()
 
         self.is_trivial = (order_used == 0)
         if self.is_trivial:
-            if neumann_order != 1:  # i.e. the user explicitly set something
-                warnings.warn(
-                    f"The {space_space} block is already 0th order, so the "
-                    "elimination is exact and the requested neumann_order "
-                    "is ignored."
-                )
-            neumann_order = 0
             v_apply = None
+            v_diag_arr = np.zeros_like(diag0_arr)
         elif (complementary_space == "pphh" and order_used == 1
              and not self.is_core_valence_separated):
-            v_apply = ppmatrix.block_pphh_pphh_1_v(
+            v_block = ppmatrix.block_pphh_pphh_1_v(
                 self.reference_state, self.ground_state, self.intermediates
-            ).apply
+            )
+            v_apply = v_block.apply
+            v_diag_arr = getattr(v_block.diagonal, complementary_space).to_ndarray()
         else:
             # Generic (less efficient, but always correct) fallback:
             # V = (block at its actual order) - (block at 0th order)
@@ -917,26 +996,134 @@ class RelinearizedAdcMatrix(AdcMatrix):
 
             def v_apply(ampl):
                 return evaluate(order_n_apply(ampl) - order_0_apply(ampl))
-        self.neumann_order = neumann_order
 
-        diag0_arr = getattr(self.diagonal_0, complementary_space).to_ndarray()
-        self.mask_active = diag0_arr <= cutoff1
-        mask_expansion = (diag0_arr > cutoff1) & (diag0_arr <= cutoff2)
-        mask_zeroth = diag0_arr > cutoff2
+            order_n_diag_arr = getattr(self._diagonal, complementary_space).to_ndarray()
+            v_diag_arr = order_n_diag_arr - diag0_arr
 
-        n_active = int(np.sum(self.mask_active))
-        n_expansion = int(np.sum(mask_expansion))
-        n_zeroth = int(np.sum(mask_zeroth))
+        default_windows = (self._DEFAULT_WINDOWS_RATIO if screening == "ratio"
+                           else self._DEFAULT_WINDOWS_ENERGY)
+        was_default = windows is None
+        if was_default:
+            windows = default_windows
+        self._validate_windows(windows)
+
+        if screening == "ratio":
+            denom = np.abs(omega_fixed - diag0_arr)
+            denom = np.where(denom < 1e-12, 1e-12, denom)
+            screen_arr = np.abs(v_diag_arr) / denom
+            # Empirically, the *raw* ratio's usable threshold shrinks with
+            # the complementary space's size roughly as N**(-1/6) (checked
+            # against independent basis-set sweeps on two different
+            # molecules) -- more configurations accumulate more neglected
+            # coupling even if each individual one looks equally small.
+            # Multiplying by N**size_exponent here compensates for this, so
+            # a single fixed threshold transfers across system sizes.
+            screen_arr = screen_arr * diag0_arr.size ** size_exponent
+        else:
+            # Screen on proximity to omega_fixed, not on the raw diagonal:
+            # a configuration is "hard" because it is close to resonance
+            # with the state being solved for, not merely because its bare
+            # 0th order energy happens to be small in an absolute sense.
+            # Configurations are implicitly processed in ascending order of
+            # this quantity (closest to omega_fixed first) by the
+            # strictly-increasing threshold convention enforced below.
+            screen_arr = np.abs(diag0_arr - omega_fixed)
+
+        if self.is_trivial and not was_default:
+            warnings.warn(
+                f"The {space_space} block is already 0th order, so the "
+                "elimination is exact regardless of the given windows "
+                "(V is identically zero)."
+            )
+
+        self.mask_active, elimination_windows = self._build_tiers(
+            screen_arr, windows
+        )
+        if self.is_trivial:
+            # V is identically zero, so any order > 0 is mathematically a
+            # no-op (and v_apply is None, since it is never needed) --
+            # merge every eliminated configuration into a single order-0
+            # window regardless of what was requested.
+            combined_mask = np.zeros_like(self.mask_active)
+            for mask, _ in elimination_windows:
+                combined_mask |= mask
+            elimination_windows = [(combined_mask, 0)] if np.any(combined_mask) else []
+
         n_total = self.mask_active.size
-        print(f"RelinearizedAdcMatrix({complementary_space}): "
-             f"{n_active}/{n_total} active (explicit), "
-             f"{n_expansion}/{n_total} order-{neumann_order} expansion, "
-             f"{n_zeroth}/{n_total} order-0.")
+        n_explicit = int(self.mask_active.sum())
+        self.window_occupancy = {
+            "total": n_total,
+            "explicit": {"count": n_explicit, "fraction": n_explicit / n_total},
+        }
+        for mask, order in elimination_windows:
+            n = int(mask.sum())
+            key = f"order-{order}"
+            # Multiple windows can share the same Neumann order (e.g. an
+            # explicitly requested order-0 window plus the implicit
+            # catch-all); accumulate rather than overwrite.
+            prev = self.window_occupancy.get(key, {"count": 0, "fraction": 0.0})
+            n_new = prev["count"] + n
+            self.window_occupancy[key] = {
+                "count": n_new, "fraction": n_new / n_total
+            }
+
+        descr = [f"{int(self.mask_active.sum())}/{n_total} explicit"]
+        descr += [f"{int(mask.sum())}/{n_total} order-{order}"
+                 for mask, order in elimination_windows]
+        print(f"RelinearizedAdcMatrix({complementary_space}, "
+             f"screening={screening}): " + ", ".join(descr))
 
         self.inverter = ComplementaryBlockInverter(
-            complementary_space, self.diagonal_0, v_apply,
-            mask_expansion, mask_zeroth, order=neumann_order
+            complementary_space, self.diagonal_0, v_apply, elimination_windows
         )
+
+    def _tier_mask(self, screen_arr, threshold):
+        if self.screening == "ratio":
+            return screen_arr >= threshold
+        else:
+            return screen_arr <= threshold
+
+    def _validate_windows(self, windows):
+        if len(windows) == 0:
+            raise ValueError("windows must contain at least one entry.")
+        thresholds = [w[1] for w in windows]
+        if self.screening == "ratio":
+            ok = all(thresholds[i] > thresholds[i + 1]
+                    for i in range(len(thresholds) - 1))
+            if not ok:
+                raise ValueError("For screening='ratio', window thresholds "
+                                 "must be strictly decreasing.")
+        else:
+            ok = all(thresholds[i] < thresholds[i + 1]
+                    for i in range(len(thresholds) - 1))
+            if not ok:
+                raise ValueError("For screening='energy', window thresholds "
+                                 "must be strictly increasing.")
+        n_explicit = sum(1 for order, _ in windows if order == "explicit")
+        if n_explicit > 1:
+            raise ValueError("At most one 'explicit' window entry is allowed.")
+        if n_explicit == 1 and windows[0][0] != "explicit":
+            raise ValueError("The 'explicit' window entry, if present, "
+                             "must be first.")
+        for order, _ in windows:
+            if order != "explicit" and (not isinstance(order, int) or order < 0):
+                raise ValueError("Window orders must be 'explicit' or a "
+                                 "non-negative integer.")
+
+    def _build_tiers(self, screen_arr, windows):
+        remaining = np.ones_like(screen_arr, dtype=bool)
+        mask_active = np.zeros_like(screen_arr, dtype=bool)
+        elimination_windows = []
+        for order, threshold in windows:
+            mask = remaining & self._tier_mask(screen_arr, threshold)
+            remaining &= ~mask
+            if order == "explicit":
+                mask_active = mask
+            else:
+                elimination_windows.append((mask, order))
+        if np.any(remaining):
+            elimination_windows.append((remaining, 0))
+        return mask_active, elimination_windows
 
     def matvec(self, v):
         space = self.complementary_space
