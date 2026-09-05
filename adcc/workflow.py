@@ -51,7 +51,7 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
             frozen_core=None, frozen_virtual=None, method=None,
             n_singlets=None, n_triplets=None, n_spin_flip=None,
             environment=None, relin=False, finalize_relinearized=True,
-            **solverargs):
+            guess_energies=None, **solverargs):
     """Run an ADC calculation.
 
     Main entry point to run an ADC calculation. The reference to build the ADC
@@ -168,6 +168,8 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
         also stored as `relinearization_residual_norms` on the returned
         state. Has no effect for an ordinary (non-relinearized) matrix.
 
+    guess_energies : float | list, optional
+
     Other parameters
     ----------------
     max_subspace : int, optional
@@ -214,7 +216,6 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
     ...
     ... state = adcc.cvs_adc3(mf, core_orbitals=1, n_singlets=3)
     """
-    was_already_relin = isinstance(data_or_matrix, RelinearizedAdcMatrix)
     matrix = construct_adcmatrix(
         data_or_matrix, core_orbitals=core_orbitals, frozen_core=frozen_core,
         frozen_virtual=frozen_virtual, method=method, relin=relin)
@@ -245,14 +246,13 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
     if env_matrix_term:
         matrix += env_matrix_term
 
-    if isinstance(matrix, RelinearizedAdcMatrix) and not was_already_relin:
-        # matrix was built with a throwaway placeholder omega_guess (see
-        # construct_adcmatrix) since n_states/kind/guesses were not yet
-        # available at that point -- refine it now with the real target
-        # energies. Never touch a RelinearizedAdcMatrix the caller
-        # supplied directly: it is already configured as intended.
-        omega_guess = estimate_omega_guess(matrix, n_states, kind,
-                                           guesses=guesses)
+    if isinstance(matrix, RelinearizedAdcMatrix) and \
+            RelinearizedAdcMatrix.omega_fixed == 0.0:
+        # Update omega to actual guess energies
+        if guess_energies is None:
+            omega_guess = estimate_omega_guess(
+                matrix, n_states, kind, guesses=guesses
+            )
         matrix.update_omega_guess(omega_guess)
 
     property_method = None
