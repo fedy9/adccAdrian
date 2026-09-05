@@ -29,7 +29,7 @@ from .OneParticleOperator import OneParticleOperator
 from .OneParticleDensity import OneParticleDensity
 from .NParticleOperator import OperatorSymmetry, NParticleOperator
 from .TwoParticleOperator import TwoParticleOperator
-from .functions import einsum
+from .functions import einsum, evaluate
 from .MoSpaces import split_spaces
 
 import libadcc
@@ -79,52 +79,6 @@ def transform_operator_ao2mo(tensor_bb: Tensor, tensor_ff: NParticleOperator,
             raise NotImplementedError(
                 "Only one- and two-particle operators are implemented."
             )
-
-
-def transform_operator_ao2mo_spin_projected(tensor_bb: Tensor,
-                                            tensor_ff: NParticleOperator,
-                                            coeff_map: dict[str, Tensor],
-                                            spin_map: str = "aa",
-                                            conv_tol: float = 1e-14):
-    """Take a tensor in the atomic orbital basis
-    and transform it into the molecular orbital basis in the
-    convention used by adcc.
-
-    The transformation is performed block-wise using the provided
-    molecular orbital coefficient matrices for the selected
-    spin components.
-
-    Parameters
-    ----------
-    tensor_bb : Tensor
-        Tensor in the atomic orbital basis
-    tensor_ff : Tensor
-        Output tensor with the symmetry set-up to contain
-        the operator in the molecular orbital representation
-    coeff_map : dict
-        Dictionary containing molecular orbital coefficient matrices,
-        keyed by orbital space and spin label (e.g. "<space>_a", "<space>_b").
-    spin_map : str, optional
-        Two-character string specifying which spin components are projected
-        for the left and right indices (e.g. "aa", "ab"). Default is "aa".
-    conv_tol : float, optional
-        SCF convergence tolerance, by default 1e-14
-    """
-    assert len(spin_map) == 2
-    spin1, spin2 = list(spin_map)
-
-    for blk in tensor_ff.canonical_blocks:
-        if len(blk) == 4:
-            s1, s2 = split_spaces(blk)
-            cleft = coeff_map[f"{s1}_{spin1}"]
-            cright = coeff_map[f"{s2}_{spin2}"]
-            temp = cleft @ tensor_bb @ cright.transpose()
-
-            # TODO: once the permutational symmetry is correct:
-            # tensor_ff.set_block(blk, tensor_ff)
-            tensor_ff[blk].set_from_ndarray(temp.to_ndarray(), conv_tol)
-        else:
-            raise NotImplementedError
 
 
 def replicate_ao_block(mospaces, tensor,
@@ -276,23 +230,34 @@ class OperatorIntegrals:
             coeff_map[sp + "_a"] = self._coefficients_alpha(sp + "b")
             coeff_map[sp + "_b"] = self._coefficients_beta(sp + "b")
 
-        S_aa = OneParticleOperator(self.mospaces,
-                                   symmetry=OperatorSymmetry.NOSYMMETRY)
-        transform_operator_ao2mo_spin_projected(ovlp_bb, S_aa, coeff_map, "aa",
-                                                self._conv_tol)
+        def spin_projected_overlap(spin1, spin2):
+            # Build the spin1-spin2 projected MO overlap matrix block by
+            # block as plain Tensor objects (not wrapped in a
+            # OneParticleOperator). For restricted references the mospaces
+            # symmetry setup for a same-space (e.g. o1o1) one-particle
+            # operator assumes the alpha and beta spin blocks are
+            # identical, which is true for essentially every *physical*
+            # one-particle operator used elsewhere in adcc, but not for
+            # these deliberately spin-resolved overlap intermediates
+            # (S^aa and S^bb individually differ, and S^ab lives exactly
+            # in the "forbidden" alpha-beta cross block). Keeping them as
+            # plain tensors avoids tripping that assumption.
+            result = {}
+            for sp1 in self.mospaces.subspaces:
+                for sp2 in self.mospaces.subspaces:
+                    cleft = coeff_map[f"{sp1}_{spin1}"]
+                    cright = coeff_map[f"{sp2}_{spin2}"]
+                    result[sp1 + sp2] = evaluate(
+                        cleft @ ovlp_bb @ cright.transpose()
+                    )
+            return result
 
-        S_ab = OneParticleOperator(self.mospaces,
-                                   symmetry=OperatorSymmetry.NOSYMMETRY)
-        transform_operator_ao2mo_spin_projected(ovlp_bb, S_ab, coeff_map, "ab",
-                                                self._conv_tol)
-
-        S_bb = OneParticleOperator(self.mospaces,
-                                   symmetry=OperatorSymmetry.NOSYMMETRY)
-        transform_operator_ao2mo_spin_projected(ovlp_bb, S_bb, coeff_map, "bb",
-                                                self._conv_tol)
+        S_aa = spin_projected_overlap("a", "a")
+        S_ab = spin_projected_overlap("a", "b")
+        S_bb = spin_projected_overlap("b", "b")
 
         # additional intermediate (is diagonal)
-        S_aa_minus_bb = S_aa - S_bb
+        S_aa_minus_bb = {blk: evaluate(S_aa[blk] - S_bb[blk]) for blk in S_aa}
 
         op = TwoParticleOperator(self.mospaces, symmetry=OperatorSymmetry.HERMITIAN)
         for block in op.canonical_blocks:

@@ -43,6 +43,10 @@ unrestricted_cases = [
     (case.file_name, c) for case in test_cases if not case.restricted
     for c in case.cases
 ]
+restricted_cases = [
+    (case.file_name, c) for case in test_cases if case.restricted
+    for c in case.cases
+]
 small_cases = [
     (case.file_name, c) for case in test_cases if not case.only_full_mode
     for c in ["gen", "cvs"]
@@ -181,6 +185,21 @@ class TestLazyMp:
             instances.get(system, case).ssq(2)
             == approx(refmp["mp2"]["ssq"])
         )
+
+    # For a restricted (closed-shell) reference the ground state is an exact
+    # singlet at every MP order, so <S^2> is exactly zero -- no reference data
+    # needed, unlike the unrestricted case above.
+    @pytest.mark.parametrize("system,case", [(s, c) for s, c in restricted_cases
+                                             if "cvs" not in c])
+    def test_mp1_ssq_restricted(self, system: str, case: str,
+                                instances: LazyMpCache):
+        assert instances.get(system, case).ssq(1) == approx(0, abs=1e-10)
+
+    @pytest.mark.parametrize("system,case", [(s, c) for s, c in restricted_cases
+                                             if "cvs" not in c])
+    def test_mp2_ssq_restricted(self, system: str, case: str,
+                                instances: LazyMpCache):
+        assert instances.get(system, case).ssq(2) == approx(0, abs=1e-10)
 
     @pytest.mark.parametrize("system,case", cases)
     @pytest.mark.parametrize("generator", generators)

@@ -156,7 +156,7 @@ class ExcitedStates(ElectronicTransition):
             ))
             values.clear()
             values.clear()
-        if ssq and not self.reference_state.restricted:
+        if ssq:
             values.extend(f"{ssq:^9.4f}"
                           for ssq in self.state_ssq)
             columns.append(TableColumn(

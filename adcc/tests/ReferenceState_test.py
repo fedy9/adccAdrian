@@ -182,7 +182,9 @@ class TestReferenceState(unittest.TestCase):
         assert res["frozen_virtual"] == [67, 69, 137, 139]
 
 
-systems = ["cn_sto3g", "cn_ccpvdz"]
+# cn_* are unrestricted (doublet) references, h2o_* are restricted
+# (closed-shell singlet) references
+systems = ["cn_sto3g", "cn_ccpvdz", "h2o_sto3g", "h2o_ccpvdz"]
 
 
 # <S^2> of the HF determinant does not depend on the orbital space partitioning

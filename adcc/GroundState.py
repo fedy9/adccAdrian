@@ -199,10 +199,6 @@ class GroundState:
         """
         Return <S^2> of the ground state.
         """
-        if self.reference_state.restricted:
-            raise NotImplementedError(
-                "<S^2> is not implemented for restricted HF references."
-            )
         ssq_1p_op = self.reference_state.operators.ssq_1p
         ssq_2p_op = self.reference_state.operators.ssq_2p
         # the trace of the second-order (and higher) correction to the RDM1

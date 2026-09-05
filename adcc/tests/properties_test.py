@@ -25,12 +25,61 @@ import numpy as np
 from numpy.testing import assert_allclose
 
 from adcc.State2States import State2States
-from adcc.backends import run_hf
+from adcc.backends import run_hf, have_backend
 from adcc.misc import assert_allclose_signfix
 from adcc import run_adc, AdcMethod
 from adcc.AdcMethod import MethodLevel
 from .testdata_cache import testdata_cache
 from . import testcases
+
+
+@pytest.mark.skipif(not have_backend("pyscf"), reason="pyscf not found.")
+def test_state_ssq_restricted_matches_unrestricted():
+    """
+    <S^2> of ADC excited states computed on a restricted (RHF) reference
+    should agree with the <S^2> of the same physical states computed on
+    an unrestricted (UHF) reference for the same closed-shell system,
+    since a UHF calculation started from a closed-shell guess converges
+    to the identical (spin-unpolarised) solution. Matching states are
+    identified by their (near-identical) excitation energy. This
+    cross-checks the restricted-reference <S^2> implementation against
+    the independent (structurally different) unrestricted code path,
+    rather than against a fixed reference number.
+    """
+    from pyscf import gto, scf
+
+    mol = gto.M(
+        atom="O 0 0 0; H 0 0 0.96; H 0.9 0 -0.3",
+        basis="sto-3g", unit="Bohr", verbose=0,
+    )
+
+    mf_r = scf.RHF(mol)
+    mf_r.conv_tol = 1e-11
+    mf_r.conv_tol_grad = 1e-9
+    mf_r.kernel()
+
+    mf_u = scf.UHF(mol)
+    mf_u.conv_tol = 1e-11
+    mf_u.conv_tol_grad = 1e-9
+    mf_u.kernel()
+
+    singlets_r = adcc.adc2(mf_r, n_singlets=2, conv_tol=1e-9)
+    triplets_r = adcc.adc2(mf_r, n_triplets=2, conv_tol=1e-9)
+    state_u = adcc.adc2(mf_u, n_states=6, conv_tol=1e-9)
+
+    energies_r = np.concatenate([singlets_r.excitation_energy,
+                                 triplets_r.excitation_energy])
+    ssq_all_r = np.concatenate([singlets_r.state_ssq, triplets_r.state_ssq])
+
+    for e_r, ssq_r in zip(energies_r, ssq_all_r):
+        # match by excitation energy: the underlying operator is the same
+        # regardless of how the reference determinant is spin-restricted
+        i_match = np.argmin(np.abs(state_u.excitation_energy - e_r))
+        assert state_u.excitation_energy[i_match] == pytest.approx(e_r, abs=1e-6)
+        assert ssq_r == pytest.approx(state_u.state_ssq[i_match], abs=1e-6)
+        # sanity check: <S^2> should be close to a pure singlet (0) or
+        # triplet (2), not some arbitrary intermediate value
+        assert min(abs(ssq_r), abs(ssq_r - 2)) < 1e-3
 
 
 # The density matrices are already tested in state_densities_test.py
