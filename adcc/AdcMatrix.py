@@ -21,6 +21,7 @@
 ##
 ## ---------------------------------------------------------------------
 import itertools
+import warnings
 import numpy as np
 
 import libadcc
@@ -29,9 +30,10 @@ from .LazyMp import LazyMp
 from .adc_pp import matrix as ppmatrix
 from .timings import Timer, timed_member_call
 from .AdcMethod import AdcMethod, Method, AdcType
-from .functions import ones_like
+from .functions import ones_like, evaluate
 from .Intermediates import Intermediates
 from .AmplitudeVector import AmplitudeVector
+from .ComplementaryBlockInverter import ComplementaryBlockInverter
 
 
 class AdcExtraTerm:
@@ -779,3 +781,242 @@ class AdcMatrixProjected(AdcMatrix):
                                   "projected ADC matrices.")
         # TODO The way to implement this is to ask the inner matrix to
         #      a block_view and then wrap that in an AdcMatrixProjected.
+
+
+class RelinearizedAdcMatrix(AdcMatrix):
+    """
+    Relinearized ("folded"/"downfolded") ADC matrix: the self-coupling of
+    one excitation space (the "complementary" space, e.g. "pphh") is
+    partitioned by energy into up to three windows, following the general
+    amplitude-elimination ("relinearization") scheme also used to derive
+    e.g. CC2/CC3 from a higher-order theory:
+
+    - window 1 (0-cutoff1): kept as explicit unknowns, coupled to the rest
+      of the matrix via the real, unapproximated complementary block.
+    - window 2 (cutoff1-cutoff2): eliminated ("folded" into the remaining
+      spaces) using a truncated Neumann series of order `neumann_order`
+      (default 1) for the inverse of (omega_fixed - A_QQ).
+    - window 3 (above cutoff2): eliminated at 0th order only (a plain
+      diagonal divide).
+
+    In both eliminated windows, A_QQ = D + V is split into the diagonal,
+    0th order (bare orbital energy) part D and the remainder V.
+    D is spin-blind by construction (it cannot distinguish e.g. an "aaaa" from
+    an "abab" spin-block, since orbital energies don't depend on spin for
+    a restricted reference), so this split keeps the resulting
+    approximation spin-pure, unlike using the diagonal of the full
+    (correlated) block would. The window boundaries are likewise defined
+    using this same 0th order diagonal, so that spin-partner
+    configurations (which necessarily share the same 0th order energy)
+    are always assigned to the same window.
+
+    There is never any direct coupling between window 2 and window 3.
+    Coupling between window 1 (explicit) and the eliminated windows 2+3
+    can be included or dropped via `include_coupling`.
+
+    Since this relinearization fixes `omega_fixed` once and for all, the
+    resulting operator is linear and can be diagonalised with the
+    ordinary Davidson/Lanczos solvers. The price is that the result may
+    only be exact for `omega_fixed` equal to the true eigenvalue; for other
+    choices it is an approximation whose quality improves as `omega_fixed`
+    approaches the true eigenvalue and/or as the windows are enlarged/the
+    Neumann order is increased. If the complementary block is 0th order
+    to begin with (true, in particular, for the default complementary
+    space -- i.e. the highest excitation class present -- of any
+    even-level ADC(n) method, e.g. ADC(2) or ADC(4)), V is identically
+    zero, the elimination is exact regardless of `omega_fixed` or the
+    cutoffs, and the Neumann expansion is skipped entirely.
+
+    Parameters
+    ----------
+    matrix : AdcMatrix
+        The full ADC matrix to relinearize.
+    omega_fixed : float
+        Fixed frequency used inside the (omega_fixed - A_QQ)^{-1}
+        approximation for the eliminated windows.
+    cutoff1 : float
+        Upper energy bound (in the 0th order diagonal of the
+        complementary block) of window 1 (kept explicit).
+    cutoff2 : float, optional
+        Upper energy bound of window 2 (Neumann expansion). Must be
+        >= cutoff1. Defaults to cutoff1, i.e. an empty window 2 (only
+        windows 1 and 3 are used).
+    complementary_space : str, optional
+        Excitation space to relinearize. Defaults to the highest
+        excitation class present in `matrix` (`matrix.axis_blocks[-1]`).
+    neumann_order : int, optional
+        Order of the Neumann expansion used for window 2 (default 1).
+        Ignored (forced to 0) if the complementary block is 0th order.
+    include_coupling : bool, optional
+        Whether the explicit (window 1) part of the complementary space
+        directly couples to the eliminated (window 2+3) part via the real
+        complementary block (True, default) or whether this coupling is
+        neglected (False), i.e. window 1 only communicates with the
+        eliminated windows indirectly, via the other excitation spaces.
+    """
+
+    def __init__(self, matrix, omega_fixed, cutoff1, cutoff2=None,
+                complementary_space=None, neumann_order=1,
+                include_coupling=True):
+        super().__init__(matrix.method, matrix.ground_state,
+                         block_orders=matrix.block_orders,
+                         intermediates=matrix.intermediates)
+
+        if complementary_space is None:
+            complementary_space = self.axis_blocks[-1]
+        if complementary_space not in self.axis_blocks:
+            raise ValueError(f"Invalid complementary_space {complementary_space}: "
+                             f"not one of {self.axis_blocks}.")
+        if len(self.axis_blocks) < 2:
+            raise ValueError("RelinearizedAdcMatrix needs at least one "
+                             "excitation space besides the complementary one.")
+        self.complementary_space = complementary_space
+        self.omega_fixed = omega_fixed
+        self.include_coupling = include_coupling
+
+        if cutoff2 is None:
+            cutoff2 = cutoff1
+        if cutoff2 < cutoff1:
+            raise ValueError("cutoff2 needs to be >= cutoff1.")
+        self.cutoff1 = cutoff1
+        self.cutoff2 = cutoff2
+
+        space_space = f"{complementary_space}_{complementary_space}"
+        order_used = self.block_orders.get(space_space, None)
+        if order_used is None:
+            raise ValueError(f"The {space_space} block is not part of this "
+                             "ADC matrix.")
+
+        variant = "cvs" if self.is_core_valence_separated else None
+        diagonal_0_block = ppmatrix.block(
+            self.ground_state, [complementary_space, complementary_space],
+            order=0, intermediates=self.intermediates, variant=variant
+        )
+        self.diagonal_0 = diagonal_0_block.diagonal
+
+        self.is_trivial = (order_used == 0)
+        if self.is_trivial:
+            if neumann_order != 1:  # i.e. the user explicitly set something
+                warnings.warn(
+                    f"The {space_space} block is already 0th order, so the "
+                    "elimination is exact and the requested neumann_order "
+                    "is ignored."
+                )
+            neumann_order = 0
+            v_apply = None
+        elif (complementary_space == "pphh" and order_used == 1
+             and not self.is_core_valence_separated):
+            v_apply = ppmatrix.block_pphh_pphh_1_v(
+                self.reference_state, self.ground_state, self.intermediates
+            ).apply
+        else:
+            # Generic (less efficient, but always correct) fallback:
+            # V = (block at its actual order) - (block at 0th order)
+            order_n_apply = self.blocks[space_space]
+            order_0_apply = diagonal_0_block.apply
+
+            def v_apply(ampl):
+                return evaluate(order_n_apply(ampl) - order_0_apply(ampl))
+        self.neumann_order = neumann_order
+
+        diag0_arr = getattr(self.diagonal_0, complementary_space).to_ndarray()
+        self.mask_active = diag0_arr <= cutoff1
+        mask_expansion = (diag0_arr > cutoff1) & (diag0_arr <= cutoff2)
+        mask_zeroth = diag0_arr > cutoff2
+
+        n_active = int(np.sum(self.mask_active))
+        n_expansion = int(np.sum(mask_expansion))
+        n_zeroth = int(np.sum(mask_zeroth))
+        n_total = self.mask_active.size
+        print(f"RelinearizedAdcMatrix({complementary_space}): "
+             f"{n_active}/{n_total} active (explicit), "
+             f"{n_expansion}/{n_total} order-{neumann_order} expansion, "
+             f"{n_zeroth}/{n_total} order-0.")
+
+        self.inverter = ComplementaryBlockInverter(
+            complementary_space, self.diagonal_0, v_apply,
+            mask_expansion, mask_zeroth, order=neumann_order
+        )
+
+    def matvec(self, v):
+        space = self.complementary_space
+        space_space = f"{space}_{space}"
+
+        # Never trust whatever the eliminated windows of the input vector
+        # happen to hold -- they are recomputed fresh below, never stored.
+        v_active = v.copy()
+        active_tensor = getattr(v_active, space)
+        active_tensor.set_from_ndarray(
+            active_tensor.to_ndarray() * self.mask_active, 1e-14
+        )
+
+        # Apply every block except the complementary space's own
+        # self-coupling. Afterwards, result's `space` block holds exactly
+        # the coupling of the *other* spaces into `space` (evaluated at
+        # the active/window-1 amplitudes) -- this is the "external" part
+        # of the numerator driving the eliminated windows.
+        result = v.zeros_like()
+        for name, block_fn in self.blocks.items():
+            if name != space_space:
+                result += block_fn(v_active)
+
+        numerator_arr = getattr(result, space).to_ndarray().copy()
+
+        # The real, unapproximated complementary block applied to the
+        # active part: its window-1 output is window-1's own (exact)
+        # self-coupling; its window-2/3 output is the direct
+        # active->inactive coupling (only used if include_coupling).
+        self_coupling_arr = getattr(
+            self.blocks[space_space](v_active), space
+        ).to_ndarray()
+
+        # The `space` output only ever represents window-1 (explicit)
+        # unknowns -- windows 2+3 are not independent degrees of freedom
+        # and must never appear in the returned vector, even transiently
+        # via the "external" contribution computed above.
+        result_space = getattr(result, space)
+        result_space.set_from_ndarray(
+            result_space.to_ndarray() * self.mask_active
+            + self_coupling_arr * self.mask_active,
+            1e-14
+        )
+
+        if self.include_coupling:
+            numerator_arr += self_coupling_arr * (~self.mask_active)
+        numerator_arr *= (~self.mask_active)
+        numerator = AmplitudeVector(**{space: active_tensor.zeros_like()})
+        getattr(numerator, space).set_from_ndarray(numerator_arr, 1e-14)
+
+        v_compl = self.inverter.apply(numerator, self.omega_fixed)
+
+        # Fold the eliminated part back into the other excitation spaces.
+        for name, block_fn in self.blocks.items():
+            b1, b2 = name.split("_")
+            if b2 == space and name != space_space:
+                result += block_fn(v_compl)
+
+        if self.include_coupling:
+            fed_back = getattr(
+                self.blocks[space_space](v_compl), space
+            ).to_ndarray()
+            result_space.set_from_ndarray(
+                result_space.to_ndarray() + fed_back * self.mask_active, 1e-14
+            )
+
+        return result
+
+    def diagonal(self):
+        # The eliminated windows are never independent unknowns; report a
+        # large diagonal there so guesses/preconditioning never favour
+        # them (mirrors AdcMatrixProjected's treatment of ignored blocks).
+        out = super().diagonal()
+        space = self.complementary_space
+        tensor = getattr(out, space)
+        arr = tensor.to_ndarray()
+        arr = np.where(self.mask_active, arr, 1e5)
+        new_tensor = tensor.zeros_like()
+        new_tensor.set_from_ndarray(arr, 1e-14)
+        return AmplitudeVector(**{
+            **{b: t for b, t in out.items() if b != space},
+            space: new_tensor,
+        })

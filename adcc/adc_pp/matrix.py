@@ -246,6 +246,47 @@ def block_pphh_pphh_1(hf, mp, intermediates):
     return AdcBlock(apply, diagonal_pphh_pphh_1(hf))
 
 
+def diagonal_pphh_pphh_1_v(hf):
+    """
+    Diagonal of the "fluctuation" part of the 1st order pphh_pphh block,
+    i.e. diagonal_pphh_pphh_1 with the 0th order (bare orbital energy)
+    contribution dropped. Used by RelinearizedAdcMatrix, where the 0th
+    order part plays the role of the (spin-pure) diagonal D and this is
+    the remaining off-diagonal-in-spirit coupling V = block_1 - block_0.
+    """
+    if hf.has_core_occupied_space:
+        diag_oC = einsum("iJiJ->iJ", hf.ococ)
+    else:
+        diag_oC = einsum("ijij->ij", hf.oooo).symmetrise()
+    dinterm_ov = (-2.0 * einsum("iaia->ia", hf.ovov)).evaluate()
+    if hf.has_core_occupied_space:
+        dinterm_Cv = (-2.0 * einsum("IaIa->Ia", hf.cvcv)).evaluate()
+    else:
+        dinterm_Cv = dinterm_ov
+    diag_vv = einsum("abab->ab", hf.vvvv).symmetrise()
+    return AmplitudeVector(pphh=(
+        + direct_sum("ia+Jb->iJab", dinterm_ov, dinterm_Cv).symmetrise(2, 3)
+        + direct_sum("iJ+ab->iJab", diag_oC, diag_vv)
+    ))
+
+
+def block_pphh_pphh_1_v(hf, mp, intermediates):
+    """
+    The "fluctuation" part V of the 1st order pphh_pphh block, i.e.
+    block_pphh_pphh_1 with the 0th order (bare orbital energy,
+    block_pphh_pphh_0) contribution dropped. See diagonal_pphh_pphh_1_v.
+    """
+    def apply(ampl):
+        return AmplitudeVector(pphh=(
+            + (
+                -4 * einsum("ikac,kbjc->ijab", ampl.pphh, hf.ovov)
+            ).antisymmetrise(0, 1).antisymmetrise(2, 3)
+            + 0.5 * einsum("ijkl,klab->ijab", hf.oooo, ampl.pphh)
+            + 0.5 * einsum("ijcd,abcd->ijab", ampl.pphh, hf.vvvv)
+        ))
+    return AdcBlock(apply, diagonal_pphh_pphh_1_v(hf))
+
+
 def block_cvs_pphh_pphh_1(hf, mp, intermediates):
     def apply(ampl):
         return AmplitudeVector(pphh=(
