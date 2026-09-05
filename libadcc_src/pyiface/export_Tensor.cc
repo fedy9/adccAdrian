@@ -409,6 +409,19 @@ static ten_ptr Tensor_scalar__sub__(const ten_ptr& self, scalar_type number) {
   }
 }
 
+static ten_ptr Tensor_scalar__rsub__(const ten_ptr& self, scalar_type number) {
+  // number - self
+  if (number == 0) {
+    return self->scale(-1.0);
+  } else {
+    // TODO I know there are more efficient ways to do this in libtensor,
+    //      but they are not yet exported all the way up
+    auto other = self->empty_like();
+    other->fill(number);
+    return self->scale(-1.0)->add(other);
+  }
+}
+
 //
 // Operations with another tensor
 //
@@ -534,7 +547,7 @@ void export_Tensor(py::module& m) {
         .def("__add__", &Tensor_scalar__add__, py::arg("number"))    // tensor + scalar
         .def("__sub__", &Tensor_scalar__sub__, py::arg("number"))    // tensor - scalar
         .def("__radd__", &Tensor_scalar__add__, py::arg("number"))   // scalar + tensor
-        .def("__rsub__", &Tensor_scalar__sub__, py::arg("number"))   // scalar - tensor
+        .def("__rsub__", &Tensor_scalar__rsub__, py::arg("number"))  // scalar - tensor
         .def("__imul__", &Tensor_scalar__imul__, py::arg("number"))  // tensor *= scalar
         .def("__mul__", &Tensor_scalar__mul__, py::arg("number"))    // tensor * scalar
         .def("__rmul__", &Tensor_scalar__mul__, py::arg("number"))   // scalar * tensor
