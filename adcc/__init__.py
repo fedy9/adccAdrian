@@ -28,7 +28,7 @@ from .LazyMp import LazyMp
 from .Tensor import Tensor
 from .Symmetry import Symmetry
 from .MoSpaces import MoSpaces
-from .AdcMatrix import AdcMatrix
+from .AdcMatrix import AdcMatrix, RelinearizedAdcMatrix
 from .AdcMethod import AdcMethod, IsrMethod
 from .functions import (copy, direct_sum, dot, einsum, empty_like,
                         evaluate, lincomb, linear_combination, nosym_like,
@@ -54,7 +54,7 @@ from .guess import (guess_symmetries, guess_zero, guesses_any, guesses_singlet,
 from .workflow import run_adc
 from .exceptions import InputError
 
-__all__ = ["run_adc", "InputError", "AdcMatrix",
+__all__ = ["run_adc", "InputError", "AdcMatrix", "RelinearizedAdcMatrix",
            "AdcMethod", "IsrMethod", "Symmetry", "ReferenceState", "MoSpaces",
            "einsum", "copy", "dot", "empty_like", "evaluate",
            "lincomb", "nosym_like", "ones_like", "transpose",

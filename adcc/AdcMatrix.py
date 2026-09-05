@@ -900,16 +900,14 @@ class RelinearizedAdcMatrix(AdcMatrix):
         self.complementary_space = complementary_space
         self.include_coupling = include_coupling
 
-        omega_guesses = np.atleast_1d(np.asarray(omega_guess, dtype=float))
-        self.omega_fixed = float(np.mean(omega_guesses))
-        self.omega_screen = float(np.max(omega_guesses))
-
         if explicit_width is None:
             explicit_width = self._DEFAULT_EXPLICIT_WIDTH
         if order1_width is None:
             order1_width = self._DEFAULT_ORDER1_WIDTH
         if not (0 <= explicit_width < order1_width):
             raise ValueError("Need 0 <= explicit_width < order1_width.")
+        self.explicit_width = explicit_width
+        self.order1_width = order1_width
 
         space_space = f"{complementary_space}_{complementary_space}"
         order_used = self.block_orders.get(space_space, None)
@@ -917,23 +915,29 @@ class RelinearizedAdcMatrix(AdcMatrix):
             raise ValueError(f"The {space_space} block is not part of this "
                              "ADC matrix.")
 
+        # Everything from here down (the bare 0th order diagonal and the
+        # fluctuation V) depends only on the method/complementary_space,
+        # never on omega_guess -- computed once here and reused by every
+        # later update_omega_guess() call, so a better omega_guess
+        # becoming available later (e.g. once real guess vectors exist)
+        # never needs any of this recomputed.
         variant = "cvs" if self.is_core_valence_separated else None
         diagonal_0_block = ppmatrix.block(
             self.ground_state, [complementary_space, complementary_space],
             order=0, intermediates=self.intermediates, variant=variant
         )
         self.diagonal_0 = diagonal_0_block.diagonal
-        diag0_arr = getattr(self.diagonal_0, complementary_space).to_ndarray()
+        self._diag0_arr = getattr(self.diagonal_0, complementary_space).to_ndarray()
 
         self.is_trivial = (order_used == 0)
         if self.is_trivial:
-            v_apply = None
+            self._v_apply = None
         elif (complementary_space == "pphh" and order_used == 1
              and not self.is_core_valence_separated):
             v_block = ppmatrix.block_pphh_pphh_1_v(
                 self.reference_state, self.ground_state, self.intermediates
             )
-            v_apply = v_block.apply
+            self._v_apply = v_block.apply
         else:
             # Generic (less efficient, but always correct) fallback:
             # V = (block at its actual order) - (block at 0th order)
@@ -942,15 +946,36 @@ class RelinearizedAdcMatrix(AdcMatrix):
 
             def v_apply(ampl):
                 return evaluate(order_n_apply(ampl) - order_0_apply(ampl))
+            self._v_apply = v_apply
+
+        self.update_omega_guess(omega_guess)
+
+    def update_omega_guess(self, omega_guess):
+        """
+        (Re-)derive `omega_fixed`/`omega_screen` from `omega_guess` and
+        recompute the tier partition (`mask_active`, `window_occupancy`,
+        `inverter`) accordingly. Everything else -- in particular
+        `self.blocks`, so any environment-coupling term added via `+=`
+        after construction -- is left untouched, unlike constructing a
+        new `RelinearizedAdcMatrix` from scratch would.
+
+        This is what lets construction be split into two stages: build
+        with a throwaway placeholder `omega_guess` (e.g. `0.0`) before
+        the real target energies are known -- e.g. before initial guess
+        vectors have been obtained -- then call this once they are.
+        """
+        omega_guesses = np.atleast_1d(np.asarray(omega_guess, dtype=float))
+        self.omega_fixed = float(np.mean(omega_guesses))
+        self.omega_screen = float(np.max(omega_guesses))
 
         # Configurations are screened by proximity to omega_screen, not
         # to the raw diagonal: a configuration is "hard" because it is
         # close to resonance with the highest targeted state, not merely
         # because its bare 0th order energy happens to be small in an
         # absolute sense.
-        screen_arr = np.abs(diag0_arr - self.omega_screen)
-        self.mask_active = screen_arr <= explicit_width
-        mask_order1 = (~self.mask_active) & (screen_arr <= order1_width)
+        screen_arr = np.abs(self._diag0_arr - self.omega_screen)
+        self.mask_active = screen_arr <= self.explicit_width
+        mask_order1 = (~self.mask_active) & (screen_arr <= self.order1_width)
         mask_order0 = ~(self.mask_active | mask_order1)
 
         if self.is_trivial:
@@ -981,11 +1006,12 @@ class RelinearizedAdcMatrix(AdcMatrix):
         descr = [f"{n_explicit}/{n_total} explicit"]
         descr += [f"{int(mask.sum())}/{n_total} order-{order}"
                  for mask, order in elimination_windows]
-        print(f"RelinearizedAdcMatrix({complementary_space}): "
+        print(f"RelinearizedAdcMatrix({self.complementary_space}): "
              + ", ".join(descr))
 
         self.inverter = ComplementaryBlockInverter(
-            complementary_space, self.diagonal_0, v_apply, elimination_windows
+            self.complementary_space, self.diagonal_0, self._v_apply,
+            elimination_windows
         )
 
     def _active_masked(self, v):

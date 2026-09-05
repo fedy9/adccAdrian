@@ -23,13 +23,16 @@
 import sys
 import warnings
 
+import numpy as np
+
 from libadcc import ReferenceState
 
 from . import solver
 from .guess import (guesses_any, guesses_singlet, guesses_spin_flip,
                     guesses_triplet)
 from .LazyMp import LazyMp
-from .AdcMatrix import AdcMatrix, AdcMatrixlike, AdcExtraTerm
+from .AdcMatrix import (AdcMatrix, AdcMatrixlike, AdcExtraTerm,
+                        RelinearizedAdcMatrix)
 from .AdcMethod import AdcMethod, IsrMethod
 from .exceptions import InputError
 from .ExcitedStates import ExcitedStates
@@ -47,7 +50,8 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
             n_guesses_doubles=None, output=sys.stdout, core_orbitals=None,
             frozen_core=None, frozen_virtual=None, method=None,
             n_singlets=None, n_triplets=None, n_spin_flip=None,
-            environment=None, **solverargs):
+            environment=None, relin=False, finalize_relinearized=True,
+            **solverargs):
     """Run an ADC calculation.
 
     Main entry point to run an ADC calculation. The reference to build the ADC
@@ -137,6 +141,33 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
         The keywords to specify how coupling to an environment model,
         e.g. PE, is treated. For details see :ref:`environment`.
 
+    relin : bool, optional
+        If `True`, solve a :class:`adcc.RelinearizedAdcMatrix` built from
+        the ordinary ADC matrix instead of the ordinary matrix itself,
+        using default tier widths and an automatic `omega_guess` estimate:
+        the diagonal-based Rayleigh quotient energies of the first
+        `n_states` guess vectors -- the ones explicitly supplied via
+        `guesses`, if given, else a small, cheap (singles-only) set
+        obtained the same way the real solve's own guesses would be.
+        Default `False`. Has no effect if `data_or_matrix` already is a
+        `RelinearizedAdcMatrix` (built and passed in directly, for full
+        control over its parameters). See :class:`adcc.RelinearizedAdcMatrix`
+        for what this approximation means and when it is appropriate.
+
+    finalize_relinearized : bool, optional
+        Only relevant when solving a :class:`adcc.RelinearizedAdcMatrix`
+        (via `relin=True`, or because `data_or_matrix` already was one).
+        If `True` (the default), each
+        converged eigenpair is replaced by the result of
+        :meth:`RelinearizedAdcMatrix.finalize_vector` -- a variationally
+        more accurate Ritz value and its corresponding full eigenvector,
+        obtained from one extra evaluation against the real,
+        unapproximated matrix -- before the :class:`adcc.ExcitedStates`
+        object is built. The residual norm of each finalized state
+        (a rigorous a posteriori error bound) is printed to `output` and
+        also stored as `relinearization_residual_norms` on the returned
+        state. Has no effect for an ordinary (non-relinearized) matrix.
+
     Other parameters
     ----------------
     max_subspace : int, optional
@@ -183,9 +214,10 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
     ...
     ... state = adcc.cvs_adc3(mf, core_orbitals=1, n_singlets=3)
     """
+    was_already_relin = isinstance(data_or_matrix, RelinearizedAdcMatrix)
     matrix = construct_adcmatrix(
         data_or_matrix, core_orbitals=core_orbitals, frozen_core=frozen_core,
-        frozen_virtual=frozen_virtual, method=method)
+        frozen_virtual=frozen_virtual, method=method, relin=relin)
 
     n_states, kind = validate_state_parameters(
         matrix.reference_state, n_states=n_states, n_singlets=n_singlets,
@@ -202,12 +234,26 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
     if eigensolver is None:
         eigensolver = "davidson"
 
-    # Setup environment coupling terms and energy corrections
+    # Setup environment coupling terms and energy corrections. Safe to do
+    # before the omega_guess update below: update_omega_guess() only
+    # touches the tier partition, never `self.blocks`, so an
+    # environment-coupling term added here is preserved regardless of
+    # ordering.
     ret = setup_environment(matrix, environment)
     env_matrix_term, env_energy_corrections = ret
     # add terms to matrix
     if env_matrix_term:
         matrix += env_matrix_term
+
+    if isinstance(matrix, RelinearizedAdcMatrix) and not was_already_relin:
+        # matrix was built with a throwaway placeholder omega_guess (see
+        # construct_adcmatrix) since n_states/kind/guesses were not yet
+        # available at that point -- refine it now with the real target
+        # energies. Never touch a RelinearizedAdcMatrix the caller
+        # supplied directly: it is already configured as intended.
+        omega_guess = estimate_omega_guess(matrix, n_states, kind,
+                                           guesses=guesses)
+        matrix.update_omega_guess(omega_guess)
 
     property_method = None
     if isr_order is not None:
@@ -218,9 +264,16 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
         n_guesses_doubles=n_guesses_doubles, conv_tol=conv_tol, output=output,
         eigensolver=eigensolver, **solverargs)
 
+    residual_norms = None
+    if finalize_relinearized:
+        residual_norms = finalize_relinearized_states(matrix, diagres,
+                                                       output=output)
+
     exstates = ExcitedStates(diagres, property_method=property_method)
     exstates.kind = kind
     exstates.spin_change = spin_change
+    if residual_norms is not None:
+        exstates.relinearization_residual_norms = residual_norms
 
     # add environment corrections to excited states
     exstates += env_energy_corrections
@@ -231,11 +284,15 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
 # Individual steps
 #
 def construct_adcmatrix(data_or_matrix, core_orbitals=None, frozen_core=None,
-                        frozen_virtual=None, method=None):
+                        frozen_virtual=None, method=None, relin=False):
     """
     Use the provided data or AdcMatrix object to check consistency of the
     other passed parameters and construct the AdcMatrix object representing
-    the problem to be solved.
+    the problem to be solved. If `relin`, and the result is not already a
+    RelinearizedAdcMatrix, wrap it in one -- with a throwaway placeholder
+    `omega_guess=0.0`, since the real target energies (needing n_states/
+    kind/guesses) are not known yet at this point; run_adc refines it via
+    `update_omega_guess` once they are.
     Internal function called from run_adc.
     """
     if not isinstance(data_or_matrix, AdcMatrixlike) and method is None:
@@ -283,14 +340,19 @@ def construct_adcmatrix(data_or_matrix, core_orbitals=None, frozen_core=None,
     # Make AdcMatrix (if not done)
     if isinstance(data_or_matrix, (ReferenceState, LazyMp)):
         try:
-            return AdcMatrix(method, data_or_matrix)
+            matrix = AdcMatrix(method, data_or_matrix)
         except ValueError as e:
             # In case of an issue with CVS <-> chosen spaces
             raise InputError(str(e))
+        if relin:
+            matrix = RelinearizedAdcMatrix(matrix, omega_guess=0.0)
+        return matrix
     elif method is not None and method != data_or_matrix.method:
         warnings.warn("Ignored method parameter because data_or_matrix is an"
                       " AdcMatrixlike, which implicitly sets the method")
     if isinstance(data_or_matrix, AdcMatrixlike):
+        if relin and not isinstance(data_or_matrix, RelinearizedAdcMatrix):
+            return RelinearizedAdcMatrix(data_or_matrix, omega_guess=0.0)
         return data_or_matrix
 
 
@@ -429,6 +491,64 @@ def diagonalise_adcmatrix(matrix, n_states, kind, eigensolver="davidson",
                            callback=callback,
                            explicit_symmetrisation=explicit_symmetrisation,
                            **solverargs)
+
+
+def estimate_omega_guess(matrix, n_states, kind, guesses=None):
+    """
+    Cheap automatic `omega_guess` estimate for wrapping `matrix` (an
+    ordinary AdcMatrix) into a RelinearizedAdcMatrix (relin=True in
+    run_adc): the diagonal-based Rayleigh quotient energies of the first
+    `n_states` guess vectors that will actually be used for the real
+    solve -- `guesses[:n_states]` if the user supplied their own, else a
+    freshly (and cheaply -- singles-only, no doubles guesses) obtained
+    set via the same `obtain_guesses_by_inspection` the real solve itself
+    would fall back on. Using the actual guess vectors' own energies
+    (rather than e.g. directly sorting the raw diagonal) is consistent
+    with whatever guess selection actually does -- respecting `kind`,
+    spin symmetry, etc. -- rather than risking a different ordering from
+    re-deriving one by hand. Only ever used to seed `omega_guess`; the
+    real solve still obtains its own (typically larger and possibly
+    doubles-inclusive) guess set separately as usual.
+    Internal function called from run_adc.
+    """
+    if guesses is None:
+        guesses = obtain_guesses_by_inspection(matrix, n_states, kind,
+                                               n_guesses_doubles=0)
+    diagonal = matrix.diagonal()
+    return np.array([g.dot(diagonal * g) for g in guesses[:n_states]])
+
+
+def finalize_relinearized_states(matrix, diagres, output=sys.stdout):
+    """
+    If `matrix` is a RelinearizedAdcMatrix, replace each eigenpair in
+    `diagres` in-place by the result of `matrix.finalize_vector` -- a
+    variationally more accurate Ritz value and its full eigenvector,
+    from one extra evaluation against the real, unapproximated matrix --
+    and print the resulting residual norm (a rigorous a posteriori error
+    bound) for each state. Returns the array of residual norms, or `None`
+    if `matrix` is not a RelinearizedAdcMatrix.
+    Internal function called from run_adc.
+    """
+    if not isinstance(matrix, RelinearizedAdcMatrix):
+        return None
+
+    residual_norms = np.empty(len(diagres.eigenvalues))
+    for i in range(len(diagres.eigenvalues)):
+        full, ritz, resnorm = matrix.finalize_vector(
+            diagres.eigenvectors[i], diagres.eigenvalues[i]
+        )
+        diagres.eigenvectors[i] = full
+        diagres.eigenvalues[i] = ritz
+        residual_norms[i] = resnorm
+
+    if output is not None:
+        print("Relinearized matrix: eigenpairs finalized against the real "
+             "matrix (one extra matvec/state). Residual norm is a rigorous "
+             "a posteriori error bound on the Ritz value:", file=output)
+        for i, resnorm in enumerate(residual_norms):
+            print(f"  State {i + 1:3d}   residual norm = {resnorm:.6e}",
+                 file=output)
+    return residual_norms
 
 
 def estimate_n_guesses(matrix, n_states, singles_only=True,
