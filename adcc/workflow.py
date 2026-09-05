@@ -380,6 +380,16 @@ def diagonalise_adcmatrix(matrix, n_states, kind, eigensolver="davidson",
     # Determine explicit_symmetrisation
     explicit_symmetrisation = IndexSymmetrisation
     if kind == "singlet":
+        # For the diagonal approx. adc2xd and adc3d, the IndexSpinSymmetrisation
+        # leads to stalled Davidson in case of targeting "singlet" states with the
+        # Davidson algorithm.
+        # Reason: the first-order diagonal is not spin-blind, i.e. blocks aaaa and
+        # abab/abba are no longer identical as in ADC(2). This means that diagonal
+        # approximated states are no longer necessarily spin-pure. The omitted 
+        # couplings are necessary for guaranteed spin-purity.
+        # However, the error seems very small (1-2 meV) in comparison to the diag.
+        # approx. error itself. Enforcing the spin-kind thus leads to a stalled
+        # Davidson because the pure singlet state is no true eigenstate anymore.
         if not matrix.method.level.to_str().endswith("D"):
             explicit_symmetrisation = IndexSpinSymmetrisation(
                 matrix, enforce_spin_kind=kind
