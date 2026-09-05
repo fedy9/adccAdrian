@@ -1029,13 +1029,6 @@ class RelinearizedAdcMatrix(AdcMatrix):
             # strictly-increasing threshold convention enforced below.
             screen_arr = np.abs(diag0_arr - omega_fixed)
 
-        if self.is_trivial and not was_default:
-            warnings.warn(
-                f"The {space_space} block is already 0th order, so the "
-                "elimination is exact regardless of the given windows "
-                "(V is identically zero)."
-            )
-
         self.mask_active, elimination_windows = self._build_tiers(
             screen_arr, windows
         )
@@ -1044,6 +1037,12 @@ class RelinearizedAdcMatrix(AdcMatrix):
             # no-op (and v_apply is None, since it is never needed) --
             # merge every eliminated configuration into a single order-0
             # window regardless of what was requested.
+            if len(elimination_windows) > 1:
+                warnings.warn(
+                    f"The {space_space} block is already 0th order, so the "
+                    "inactive space is treated on equal footing and only "
+                    "two windows or equivalently one cutoff is reasonable."
+                )
             combined_mask = np.zeros_like(self.mask_active)
             for mask, _ in elimination_windows:
                 combined_mask |= mask
