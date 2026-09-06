@@ -236,8 +236,9 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
     was_already_relin = isinstance(data_or_matrix, RelinearizedAdcMatrix)
     matrix = construct_adcmatrix(
         data_or_matrix, core_orbitals=core_orbitals, frozen_core=frozen_core,
-        frozen_virtual=frozen_virtual, method=method, relin=relin,
-        explicit_width=explicit_width, order1_width=order1_width)
+        frozen_virtual=frozen_virtual, method=method, relin=relin, 
+        omega_guess=guess_energies, explicit_width=explicit_width,
+        order1_width=order1_width)
 
     n_states, kind = validate_state_parameters(
         matrix.reference_state, n_states=n_states, n_singlets=n_singlets,
@@ -272,12 +273,11 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
         # energies. Never touch a RelinearizedAdcMatrix the caller
         # supplied directly: it is already configured as intended.
         if guess_energies is None:
+            print("Updating guess energies according to Koopman guesses.")
             omega_guess = estimate_omega_guess(
                 matrix, n_states, kind, guesses=guesses
             )
-        else:
-            omega_guess = guess_energies
-        matrix.update_omega_guess(omega_guess)
+            matrix.update_omega_guess(omega_guess)
 
     property_method = None
     if isr_order is not None:
@@ -309,7 +309,7 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
 #
 def construct_adcmatrix(data_or_matrix, core_orbitals=None, frozen_core=None,
                         frozen_virtual=None, method=None, relin=False,
-                        explicit_width=None, order1_width=None):
+                        omega_guess=None, explicit_width=None, order1_width=None):
     """
     Use the provided data or AdcMatrix object to check consistency of the
     other passed parameters and construct the AdcMatrix object representing
@@ -373,8 +373,10 @@ def construct_adcmatrix(data_or_matrix, core_orbitals=None, frozen_core=None,
             # In case of an issue with CVS <-> chosen spaces
             raise InputError(str(e))
         if relin:
+            if omega_guess is None:
+                omega_guess = 0.0
             matrix = RelinearizedAdcMatrix(
-                matrix, omega_guess=0.0, explicit_width=explicit_width,
+                matrix, omega_guess=omega_guess, explicit_width=explicit_width,
                 order1_width=order1_width)
         return matrix
     elif method is not None and method != data_or_matrix.method:
@@ -382,9 +384,11 @@ def construct_adcmatrix(data_or_matrix, core_orbitals=None, frozen_core=None,
                       " AdcMatrixlike, which implicitly sets the method")
     if isinstance(data_or_matrix, AdcMatrixlike):
         if relin and not isinstance(data_or_matrix, RelinearizedAdcMatrix):
+            if omega_guess is None:
+                omega_guess = 0.0
             return RelinearizedAdcMatrix(
-                data_or_matrix, omega_guess=0.0, explicit_width=explicit_width,
-                order1_width=order1_width)
+                data_or_matrix, omega_guess=omega_guess,
+                explicit_width=explicit_width, order1_width=order1_width)
         return data_or_matrix
 
 
