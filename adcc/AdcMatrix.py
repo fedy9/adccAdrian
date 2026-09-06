@@ -804,12 +804,16 @@ class RelinearizedAdcMatrix(AdcMatrix):
     approximation spin-pure, unlike using the diagonal of the full
     (correlated) block would.
 
-    Tier membership is decided by `|D0 - omega_screen| <= width`, where
-    `omega_screen` is `max(omega_guess)` and `width` is
-    `explicit_width`/`order1_width` respectively. `pphh`-type diagonal
-    energies always sit above any reasonable target state's energy, so
-    this is effectively a one-sided cutoff at `omega_screen + width`, not
-    a symmetric window.
+    Tier membership is decided by `|D0 - omega_screen| <= cutoff`, where
+    `omega_screen` is `max(omega_guess)`; the explicit cutoff is
+    `explicit_width`, and the 1st-order cutoff is `explicit_width +
+    order1_width` (`order1_width` is a *span* added on top of
+    `explicit_width`, not itself an absolute cutoff -- so widening
+    `explicit_width` alone keeps the same-sized 1st-order buffer right
+    beyond it, rather than requiring `order1_width` to be kept in sync by
+    hand). `pphh`-type diagonal energies always sit above any reasonable
+    target state's energy, so both cutoffs are effectively one-sided,
+    not a symmetric window.
 
     There is never any direct coupling between the two eliminated tiers.
     Coupling between the explicit tier and the eliminated tiers can be
@@ -850,22 +854,29 @@ class RelinearizedAdcMatrix(AdcMatrix):
         good for every state, but anchoring tier membership at the
         highest one avoids under-treating configurations that matter
         specifically for it.
-    explicit_width, order1_width : float, optional
-        Tier widths in Ha, measured from `max(omega_guess)`; see above.
-        Default `1.0`/`5.0`. Calibrated by joint worst-case testing across
-        a 10-molecule ADC(3)/cc-pVDZ benchmark, targeting 5 states per
-        molecule at once (not just the lowest) and 0.05 eV accuracy,
-        using the Ritz value from `finalize_vector` (not the raw
-        relinearized eigenvalue) as the accuracy criterion, since that is
-        the intended normal usage pattern. Confirmed to hold up (worst
-        case still comfortably under that target) when re-tested at
-        cc-pVTZ on the hardest cc-pVDZ cases. The explicit width barely
-        engages at all under this default (well under 0.1% of
-        configurations in every tested case) -- essentially all of the
-        accuracy comes from the order-1 width together with the Ritz
-        correction, not from any expensive exact-diagonalization
-        treatment. This is a starting point based on limited testing
-        (small molecules only), not a rigorously tuned choice.
+    explicit_width : float, optional
+        Explicit-tier cutoff in Ha, measured from `max(omega_guess)`; see
+        above. Default `1.0`.
+    order1_width : float, optional
+        1st-order-tier cutoff, as a *span* in Ha added on top of
+        `explicit_width` (i.e. the actual cutoff is `explicit_width +
+        order1_width`), not an absolute cutoff of its own; see above.
+        Default `4.0`, i.e. `explicit_width=1.0` and `order1_width=4.0`
+        together reproduce a 1st-order cutoff of `5.0` Ha. Both defaults
+        were calibrated by joint worst-case testing across a 10-molecule
+        ADC(3)/cc-pVDZ benchmark, targeting 5 states per molecule at once
+        (not just the lowest) and 0.05 eV accuracy, using the Ritz value
+        from `finalize_vector` (not the raw relinearized eigenvalue) as
+        the accuracy criterion, since that is the intended normal usage
+        pattern. Confirmed to hold up (worst case still comfortably under
+        that target) when re-tested at cc-pVTZ on the hardest cc-pVDZ
+        cases. The explicit tier barely engages at all under this default
+        (well under 0.1% of configurations in every tested case) --
+        essentially all of the accuracy comes from the 1st-order tier
+        together with the Ritz correction, not from any expensive
+        exact-diagonalization treatment. This is a starting point based
+        on limited testing (small molecules only), not a rigorously tuned
+        choice.
     complementary_space : str, optional
         Excitation space to relinearize. Defaults to the highest
         excitation class present in `matrix` (`matrix.axis_blocks[-1]`).
@@ -878,9 +889,12 @@ class RelinearizedAdcMatrix(AdcMatrix):
     """
 
     # See `explicit_width`/`order1_width` above for how these were
-    # calibrated.
+    # calibrated. order1_width is a *span* on top of explicit_width (see
+    # update_omega_guess), so this default reproduces the same absolute
+    # 1st-order/0th-order boundary (1.0 + 4.0 == 5.0 Ha) the original,
+    # non-relative calibration found.
     _DEFAULT_EXPLICIT_WIDTH = 1.0
-    _DEFAULT_ORDER1_WIDTH = 5.0
+    _DEFAULT_ORDER1_WIDTH = 4.0
 
     def __init__(self, matrix, omega_guess, explicit_width=None,
                 order1_width=None, complementary_space=None,
@@ -904,9 +918,16 @@ class RelinearizedAdcMatrix(AdcMatrix):
             explicit_width = self._DEFAULT_EXPLICIT_WIDTH
         if order1_width is None:
             order1_width = self._DEFAULT_ORDER1_WIDTH
-        if not (0 <= explicit_width < order1_width):
-            raise ValueError("Need 0 <= explicit_width < order1_width.")
+        if explicit_width < 0:
+            raise ValueError("Need explicit_width >= 0.")
+        if order1_width <= 0:
+            raise ValueError("Need order1_width > 0.")
         self.explicit_width = explicit_width
+        # order1_width is a *span* added on top of explicit_width, not an
+        # absolute cutoff -- so widening explicit_width alone always keeps
+        # the same-sized 1st-order buffer right beyond it, rather than
+        # requiring order1_width to be manually kept in sync (or erroring
+        # out if it is not).
         self.order1_width = order1_width
 
         space_space = f"{complementary_space}_{complementary_space}"
@@ -975,7 +996,10 @@ class RelinearizedAdcMatrix(AdcMatrix):
         # absolute sense.
         screen_arr = np.abs(self._diag0_arr - self.omega_screen)
         self.mask_active = screen_arr <= self.explicit_width
-        mask_order1 = (~self.mask_active) & (screen_arr <= self.order1_width)
+        # order1_width is a span added on top of explicit_width, not an
+        # absolute cutoff -- see its class-attribute default comment.
+        order1_cutoff = self.explicit_width + self.order1_width
+        mask_order1 = (~self.mask_active) & (screen_arr <= order1_cutoff)
         mask_order0 = ~(self.mask_active | mask_order1)
 
         if self.is_trivial:

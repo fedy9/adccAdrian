@@ -51,7 +51,8 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
             frozen_core=None, frozen_virtual=None, method=None,
             n_singlets=None, n_triplets=None, n_spin_flip=None,
             environment=None, relin=False, finalize_relinearized=True,
-            guess_energies=None, **solverargs):
+            guess_energies=None, explicit_width=None, order1_width=None,
+            **solverargs):
     """Run an ADC calculation.
 
     Main entry point to run an ADC calculation. The reference to build the ADC
@@ -179,6 +180,13 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
         your system, e.g. because better energy estimates are already
         available from a prior, cheaper calculation.
 
+    explicit_width, order1_width : float, optional
+        Only relevant together with `relin=True` (has no effect if
+        `data_or_matrix` already is a `RelinearizedAdcMatrix` -- pass
+        these directly to that constructor instead in that case). Tier
+        widths forwarded to `RelinearizedAdcMatrix`; see its docstring
+        for what they mean and their defaults.
+
     Other parameters
     ----------------
     max_subspace : int, optional
@@ -228,7 +236,8 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
     was_already_relin = isinstance(data_or_matrix, RelinearizedAdcMatrix)
     matrix = construct_adcmatrix(
         data_or_matrix, core_orbitals=core_orbitals, frozen_core=frozen_core,
-        frozen_virtual=frozen_virtual, method=method, relin=relin)
+        frozen_virtual=frozen_virtual, method=method, relin=relin,
+        explicit_width=explicit_width, order1_width=order1_width)
 
     n_states, kind = validate_state_parameters(
         matrix.reference_state, n_states=n_states, n_singlets=n_singlets,
@@ -299,7 +308,8 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
 # Individual steps
 #
 def construct_adcmatrix(data_or_matrix, core_orbitals=None, frozen_core=None,
-                        frozen_virtual=None, method=None, relin=False):
+                        frozen_virtual=None, method=None, relin=False,
+                        explicit_width=None, order1_width=None):
     """
     Use the provided data or AdcMatrix object to check consistency of the
     other passed parameters and construct the AdcMatrix object representing
@@ -307,7 +317,10 @@ def construct_adcmatrix(data_or_matrix, core_orbitals=None, frozen_core=None,
     RelinearizedAdcMatrix, wrap it in one -- with a throwaway placeholder
     `omega_guess=0.0`, since the real target energies (needing n_states/
     kind/guesses) are not known yet at this point; run_adc refines it via
-    `update_omega_guess` once they are.
+    `update_omega_guess` once they are. `explicit_width`/`order1_width`
+    (tier widths, fixed at construction time -- unlike `omega_guess`,
+    `update_omega_guess` does not change these later) are forwarded as-is
+    to the RelinearizedAdcMatrix constructor; `None` uses its own defaults.
     Internal function called from run_adc.
     """
     if not isinstance(data_or_matrix, AdcMatrixlike) and method is None:
@@ -360,14 +373,18 @@ def construct_adcmatrix(data_or_matrix, core_orbitals=None, frozen_core=None,
             # In case of an issue with CVS <-> chosen spaces
             raise InputError(str(e))
         if relin:
-            matrix = RelinearizedAdcMatrix(matrix, omega_guess=0.0)
+            matrix = RelinearizedAdcMatrix(
+                matrix, omega_guess=0.0, explicit_width=explicit_width,
+                order1_width=order1_width)
         return matrix
     elif method is not None and method != data_or_matrix.method:
         warnings.warn("Ignored method parameter because data_or_matrix is an"
                       " AdcMatrixlike, which implicitly sets the method")
     if isinstance(data_or_matrix, AdcMatrixlike):
         if relin and not isinstance(data_or_matrix, RelinearizedAdcMatrix):
-            return RelinearizedAdcMatrix(data_or_matrix, omega_guess=0.0)
+            return RelinearizedAdcMatrix(
+                data_or_matrix, omega_guess=0.0, explicit_width=explicit_width,
+                order1_width=order1_width)
         return data_or_matrix
 
 
