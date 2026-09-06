@@ -1027,11 +1027,12 @@ class RelinearizedAdcMatrix(AdcMatrix):
                 "count": n, "fraction": n / n_total
             }
 
-        descr = [f"{n_explicit}/{n_total} explicit"]
-        descr += [f"{int(mask.sum())}/{n_total} order-{order}"
+        descr = [f"{n_explicit}/{n_total} ({n_explicit/n_total*100:.2f}%) explicit"]
+        descr += [f"{int(mask.sum())}/{n_total} ({int(mask.sum())/n_total*100:.2f}%) order-{order}"
                  for mask, order in elimination_windows]
-        print(f"RelinearizedAdcMatrix({self.complementary_space}): "
-             + ", ".join(descr))
+        print(f"RelinearizedAdcMatrix(omega_fixed={self.omega_screen:.4f}"
+              f"{self.complementary_space}): ")
+        print(", ".join(descr))
 
         self.inverter = ComplementaryBlockInverter(
             self.complementary_space, self.diagonal_0, self._v_apply,
