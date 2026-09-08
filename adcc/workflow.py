@@ -50,7 +50,7 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
             n_guesses_doubles=None, output=sys.stdout, core_orbitals=None,
             frozen_core=None, frozen_virtual=None, method=None,
             n_singlets=None, n_triplets=None, n_spin_flip=None,
-            environment=None, relin=False, finalize_relinearized=True,
+            environment=None, relin=False, finalize_relinearized=False,
             guess_energies=None, explicit_width=None, order1_width=None,
             **solverargs):
     """Run an ADC calculation.
@@ -273,10 +273,10 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
         # energies. Never touch a RelinearizedAdcMatrix the caller
         # supplied directly: it is already configured as intended.
         if guess_energies is None:
-            print("Updating guess energies according to Koopman guesses.")
             omega_guess = estimate_omega_guess(
                 matrix, n_states, kind, guesses=guesses
             )
+            print("No guess energies provided, taking the average of internal guesses.")
             matrix.update_omega_guess(omega_guess)
 
     property_method = None
