@@ -24,6 +24,7 @@ import pytest
 import numpy as np
 from numpy.testing import assert_allclose
 
+import adcc
 from adcc.State2States import State2States
 from adcc.backends import run_hf, have_backend
 from adcc.misc import assert_allclose_signfix
@@ -80,6 +81,53 @@ def test_state_ssq_restricted_matches_unrestricted():
         # sanity check: <S^2> should be close to a pure singlet (0) or
         # triplet (2), not some arbitrary intermediate value
         assert min(abs(ssq_r), abs(ssq_r - 2)) < 1e-3
+
+
+@pytest.mark.skipif(not have_backend("pyscf"), reason="pyscf not found.")
+@pytest.mark.parametrize("method_name", ["cvs_adc2", "cvs_adc2xd"])
+def test_state_ssq_restricted_matches_unrestricted_cvs(method_name):
+    """
+    Same cross-check as test_state_ssq_restricted_matches_unrestricted above,
+    but for CVS-ADC states. No CVS-specific formula for the 2-particle
+    difference density exists, so <S^2> of CVS-ADC states is obtained by
+    embedding the CVS excitation vector into the excitation space of a flat
+    (non-CVS) reference built on the same orbitals (see
+    adcc.adc_pp.state_ssq_cvs). Requesting only the two lowest states per
+    spin avoids the (unrelated) pure-doubles satellite states, which are
+    not spin-pure even for non-CVS ADC(2) states with the restricted
+    singlet/triplet guess machinery used here.
+    """
+    from pyscf import gto, scf
+
+    mol = gto.M(
+        atom="O 0 0 0; H 0 0 0.96; H 0.9 0 -0.3",
+        basis="sto-3g", unit="Bohr", verbose=0,
+    )
+
+    mf_r = scf.RHF(mol)
+    mf_r.conv_tol = 1e-11
+    mf_r.conv_tol_grad = 1e-9
+    mf_r.kernel()
+
+    mf_u = scf.UHF(mol)
+    mf_u.conv_tol = 1e-11
+    mf_u.conv_tol_grad = 1e-9
+    mf_u.kernel()
+
+    method = getattr(adcc, method_name)
+    singlets_r = method(mf_r, core_orbitals=1, n_singlets=2, conv_tol=1e-9)
+    triplets_r = method(mf_r, core_orbitals=1, n_triplets=2, conv_tol=1e-9)
+    state_u = method(mf_u, core_orbitals=1, n_states=4, conv_tol=1e-9)
+
+    energies_r = np.concatenate([singlets_r.excitation_energy,
+                                 triplets_r.excitation_energy])
+    ssq_all_r = np.concatenate([singlets_r.state_ssq, triplets_r.state_ssq])
+
+    for e_r, ssq_r in zip(energies_r, ssq_all_r):
+        i_match = np.argmin(np.abs(state_u.excitation_energy - e_r))
+        assert state_u.excitation_energy[i_match] == pytest.approx(e_r, abs=1e-6)
+        assert ssq_r == pytest.approx(state_u.state_ssq[i_match], abs=1e-6)
+        assert min(abs(ssq_r), abs(ssq_r - 2)) < 1e-1
 
 
 # The density matrices are already tested in state_densities_test.py

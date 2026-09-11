@@ -188,15 +188,15 @@ class TestLazyMp:
 
     # For a restricted (closed-shell) reference the ground state is an exact
     # singlet at every MP order, so <S^2> is exactly zero -- no reference data
-    # needed, unlike the unrestricted case above.
-    @pytest.mark.parametrize("system,case", [(s, c) for s, c in restricted_cases
-                                             if "cvs" not in c])
+    # needed, unlike the unrestricted case above. This also covers the cvs
+    # cases (unlike test_mp1_ssq/test_mp2_ssq above), since <S^2> of the MP
+    # ground state does not depend on the core/valence orbital partitioning.
+    @pytest.mark.parametrize("system,case", restricted_cases)
     def test_mp1_ssq_restricted(self, system: str, case: str,
                                 instances: LazyMpCache):
         assert instances.get(system, case).ssq(1) == approx(0, abs=1e-10)
 
-    @pytest.mark.parametrize("system,case", [(s, c) for s, c in restricted_cases
-                                             if "cvs" not in c])
+    @pytest.mark.parametrize("system,case", restricted_cases)
     def test_mp2_ssq_restricted(self, system: str, case: str,
                                 instances: LazyMpCache):
         assert instances.get(system, case).ssq(2) == approx(0, abs=1e-10)

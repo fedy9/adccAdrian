@@ -199,6 +199,16 @@ class GroundState:
         """
         Return <S^2> of the ground state.
         """
+        if self.has_core_occupied_space:
+            # The MP ground-state density corrections do not depend on how
+            # the occupied orbitals are partitioned into core/valence, so
+            # evaluate them on the flat (non-CVS) ground state instead of
+            # deriving CVS-specific formulas. `apply_cvs` is deliberately
+            # ignored here: it selects a CVS-truncated correction (dropping
+            # some core-related terms for consistency with the CVS-ADC
+            # matrix), whereas this always evaluates the complete, untruncated
+            # correction.
+            return self._flat_ground_state.ssq(level)
         ssq_1p_op = self.reference_state.operators.ssq_1p
         ssq_2p_op = self.reference_state.operators.ssq_2p
         # the trace of the second-order (and higher) correction to the RDM1
@@ -208,6 +218,30 @@ class GroundState:
             ssq_2p_op, self.density_2p(level, apply_cvs=apply_cvs)
         )
         return ssq_1p + ssq_2p
+
+    @cached_property
+    def _flat_ground_state(self) -> "GroundState":
+        """
+        The MP ground state built on the flat (non-CVS)
+        `ReferenceState.._flat_reference_state`. See there for details.
+        Used to evaluate <S^2> (ground and excited state) for CVS
+        references, which have no CVS-specific 2-particle density formula.
+        """
+        from .LazyMp import LazyMp
+        return LazyMp(self.reference_state._flat_reference_state)
+
+    @cached_property
+    def _flat_amplitude_template(self):
+        """
+        A zero `AmplitudeVector` (ph/pphh) on the excitation space of
+        `_flat_ground_state`, used as a template to embed CVS excitation
+        vectors into the flat (non-CVS) excitation space (zero coefficients
+        on the excluded, non-core configurations).
+        """
+        from .AdcMatrix import AdcMatrix
+        from .guess.guess_zero import guess_zero
+        matrix_flat = AdcMatrix("adc2", self._flat_ground_state)
+        return guess_zero(matrix_flat)
 
     @cached_member_function()
     def df(self, space: str) -> libadcc.Tensor:

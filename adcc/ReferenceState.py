@@ -142,6 +142,11 @@ class ReferenceState(libadcc.ReferenceState):
         """
         if not isinstance(hfdata, libadcc.HartreeFockSolution_i):
             hfdata = import_scf_results(hfdata)
+        # Keep a handle on the converted HF data so a "flat" (i.e. without
+        # core-valence separation) ReferenceState can later be rebuilt on
+        # the same orbitals, e.g. to evaluate operators for which no
+        # CVS-specific formula exists (see _flat_reference_state).
+        self._hfdata = hfdata
 
         self._mospaces = MoSpaces(hfdata, frozen_core=frozen_core,
                                   frozen_virtual=frozen_virtual,
@@ -268,10 +273,53 @@ class ReferenceState(libadcc.ReferenceState):
         """
         Return <S^2> of the HF reference state.
         """
+        if self.has_core_occupied_space:
+            # The HF determinant (and thus its density matrices) does not
+            # depend on how the occupied orbitals are subsequently
+            # partitioned into core/valence for CVS -- so this is exact,
+            # not an approximation.
+            return self._flat_reference_state.ssq
         ssq_1p_op = self.operators.ssq_1p
         ssq_2p_op = self.operators.ssq_2p
         ssq_1p = product_trace(ssq_1p_op, self.density)
         ssq_2p = product_trace(ssq_2p_op, self.density_2p)
         return (ssq_1p + ssq_2p)
+
+    @cached_property
+    def _flat_reference_state(self) -> "ReferenceState":
+        """
+        Return a ReferenceState built on the same orbitals and the same
+        frozen-core/frozen-virtual selection, but without core-valence
+        separation (i.e. with the core-occupied space merged back into the
+        regular occupied space).
+
+        This is used to evaluate operators for which no CVS-specific formula
+        exists (e.g. the 2-particle part of the S^2 operator): a CVS
+        excitation vector can be embedded into the excitation space of this
+        flat reference (zero coefficients on the excluded, non-core
+        configurations) and then be contracted with the ordinary
+        (non-CVS) density-matrix formulas and operators.
+        """
+        if not self.has_core_occupied_space:
+            return self
+        noa = self.n_orbs_alpha
+
+        def spatial_pair(raw_indices):
+            # mospaces.frozen_core/frozen_virtual report spin orbitals in
+            # the raw host-provider index convention (beta shifted by noa);
+            # ReferenceState's frozen_core/frozen_virtual arguments instead
+            # expect spatial (i.e. not shifted) per-spin orbital indices.
+            alpha = [i for i in raw_indices if i < noa]
+            beta = [i - noa for i in raw_indices if i >= noa]
+            return (alpha, beta)
+
+        flat = ReferenceState(
+            self._hfdata, core_orbitals=None,
+            frozen_core=spatial_pair(self.mospaces.frozen_core),
+            frozen_virtual=spatial_pair(self.mospaces.frozen_virtual),
+        )
+        assert list(flat.mospaces.virtual_orbitals) \
+            == list(self.mospaces.virtual_orbitals)
+        return flat
 
 # TODO some nice describe method

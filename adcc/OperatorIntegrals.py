@@ -209,9 +209,12 @@ class OperatorIntegrals:
     @timed_member_call("_import_timer")
     def ssq_2p(self) -> TwoParticleOperator:
         """Returns the two-particle part of the S^2 operator"""
-        # NOTE: the implementation might also work for CVS. But double check
-        # once CVS 2p densities are implemented before removing the
-        # exception.
+        # This operator itself is not CVS-aware (it has no notion of a
+        # separate core space) and must not be contracted with CVS density
+        # matrices directly. <S^2> of CVS-ADC states is instead obtained by
+        # embedding CVS quantities into a flat (non-CVS) reference and using
+        # its (non-CVS) ssq_2p operator -- see adc_pp.state_ssq_cvs and
+        # ReferenceState._flat_reference_state.
         if "o2" in self.mospaces.subspaces:
             raise NotImplementedError("The 2-particle part of the SSq operator is "
                                       "only implemented for the occupied and "

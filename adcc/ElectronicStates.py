@@ -236,6 +236,16 @@ class ElectronicStates:
     @cached_member_function(timer=_timer_name, separate_timings_by_args=False)
     def _state_ssq(self, state_n: int) -> float:
         """Computes the <S^2> of a single state."""
+        if self.reference_state.has_core_occupied_space:
+            # No CVS-specific 2-particle difference density formula exists;
+            # embed the CVS excitation vector into a flat (non-CVS)
+            # excitation space instead. See adc_pp.state_ssq_cvs for details.
+            from .adc_pp.state_ssq_cvs import cvs_state_ssq
+            return cvs_state_ssq(
+                self.ground_state, self.excitation_vector[state_n],
+                self.property_method
+            )
+
         pmethod = self.property_method
         if pmethod.level.to_int() == 0:
             gs_ssq = self.reference_state.ssq
