@@ -22,6 +22,7 @@
 ## ---------------------------------------------------------------------
 import itertools
 import numpy as np
+import scipy.linalg as la
 
 import libadcc
 
@@ -29,7 +30,7 @@ from .LazyMp import LazyMp
 from .adc_pp import matrix as ppmatrix
 from .timings import Timer, timed_member_call
 from .AdcMethod import AdcMethod, Method, AdcType
-from .functions import ones_like, evaluate
+from .functions import ones_like, evaluate, lincomb
 from .Intermediates import Intermediates
 from .AmplitudeVector import AmplitudeVector
 from .ComplementaryBlockInverter import ComplementaryBlockInverter
@@ -832,7 +833,7 @@ class RelinearizedAdcMatrix(AdcMatrix):
     e.g. ADC(2) or ADC(4)), `V` is identically zero and the elimination is
     exact regardless of `omega_guess` or the tier widths.
 
-    Use `finalize_vector` after solving to get a variationally better
+    Use `finalize_vectors` after solving to get a variationally better
     (Ritz value) estimate of the eigenvalue and a rigorous a posteriori
     residual-norm error bound, evaluated against the real, unapproximated
     matrix -- this is the intended normal usage pattern, and the default
@@ -866,7 +867,7 @@ class RelinearizedAdcMatrix(AdcMatrix):
         were calibrated by joint worst-case testing across a 10-molecule
         ADC(3)/cc-pVDZ benchmark, targeting 5 states per molecule at once
         (not just the lowest) and 0.05 eV accuracy, using the Ritz value
-        from `finalize_vector` (not the raw relinearized eigenvalue) as
+        from `finalize_vectors` (not the raw relinearized eigenvalue) as
         the accuracy criterion, since that is the intended normal usage
         pattern. Confirmed to hold up (worst case still comfortably under
         that target) when re-tested at cc-pVTZ on the hardest cc-pVDZ
@@ -1132,48 +1133,23 @@ class RelinearizedAdcMatrix(AdcMatrix):
 
         return result
 
-    def finalize_vector(self, ampl, omega):
+    def reconstruct_vector(self, ampl, omega):
         """
-        Finalize a converged relinearized eigenvector: reconstruct the
-        full vector, evaluate it against the real, unapproximated ADC
-        matrix, and return the vector together with its Ritz value and
-        residual norm with respect to that real matrix.
+        Reconstruct a converged relinearized eigenvector to full
+        dimensionality: the eliminated windows' amplitudes are evaluated
+        directly (via the same fold used internally by `matvec`, but
+        without contracting them back into the explicit space) at the
+        actual converged eigenvalue `omega` -- not `omega_fixed`, which
+        is no longer needed for accuracy once the true eigenvalue is
+        known -- and added into the corresponding (previously implicit)
+        entries of the vector. The result is renormalized to unit norm,
+        since adding those previously-implicit components changes the
+        vector's norm.
 
-        The eliminated windows' amplitudes are evaluated directly (via the
-        same fold used internally by `matvec`, but without contracting
-        them back into the explicit space) at the actual converged
-        eigenvalue `omega` -- not `omega_fixed`, which is no longer needed
-        for accuracy once the true eigenvalue is known -- and added into
-        the corresponding (previously implicit) entries of the vector.
-        The result is renormalized to unit norm, since adding those
-        previously-implicit components changes the vector's norm.
-
-        The returned Ritz value is a variationally more accurate estimate
-        of the true eigenvalue than `omega` itself: the Rayleigh quotient
-        of a vector is accurate to *second* order in the vector's error,
-        while `omega` (an eigenvalue of the approximate, relinearized
-        operator) is only first-order accurate. The residual norm gives a
-        rigorous a posteriori error bound for free: since the ADC matrix
-        is Hermitian, some true eigenvalue is guaranteed to lie within
-        `residual_norm` of the returned Ritz value -- without ever
-        needing a separately converged reference calculation.
-
-        This method deliberately stops here and applies no further
-        correction (e.g. a preconditioned residual update) to the
-        returned vector. If a fully converged solution of the real,
-        unapproximated matrix is needed, the right way to get it is a
-        separate call to a Davidson/Lanczos solver on that real matrix,
-        using the returned `full_vector` as its initial guess -- this
-        reuses the solver's own, already-validated convergence and
-        orthogonalization logic instead of duplicating a bespoke
-        correction step here, and the excellent warm start from this
-        method should mean very few further iterations are needed:
-
-        >>> full, ritz, resnorm = rel.finalize_vector(ampl, omega)
-        >>> state = jacobi_davidson(matrix, [full], n_ep=1, ...)  # doctest: +SKIP
-
-        (`matrix` being the real `AdcMatrix` that `rel` relinearizes, not
-        `rel` itself.)
+        This method applies no correction beyond reconstruction and
+        renormalization -- neither a variationally improved Ritz value
+        nor a residual/error bound is computed here. For that, reconstruct
+        and finalize all requested states together via `finalize_vectors`.
 
         Parameters
         ----------
@@ -1187,12 +1163,9 @@ class RelinearizedAdcMatrix(AdcMatrix):
 
         Returns
         -------
-        tuple(AmplitudeVector, float, float)
-            `(full_vector, ritz_value, residual_norm)`: the full,
-            unit-normalized eigenvector (including the eliminated
-            windows' amplitudes); its Rayleigh quotient against the real
-            (unfolded) ADC matrix; and the norm of the corresponding
-            residual against that real matrix.
+        AmplitudeVector
+            The full, unit-normalized eigenvector, including the
+            eliminated windows' amplitudes.
         """
         space = self.complementary_space
 
@@ -1206,19 +1179,111 @@ class RelinearizedAdcMatrix(AdcMatrix):
             full_space.to_ndarray() + getattr(v_compl, space).to_ndarray(),
             1e-14
         )
-        full = full / np.sqrt(full.dot(full))
+        return full / np.sqrt(full.dot(full))
+
+    def finalize_vectors(self, ampls, omegas):
+        """
+        Finalize a set of converged relinearized eigenvectors by one
+        additional Rayleigh-Ritz ("Davidson") step against the real,
+        unapproximated ADC matrix.
+
+        Each vector is first reconstructed to full dimensionality (see
+        `reconstruct_vector`). Reconstruction is done independently per
+        vector and breaks the mutual orthogonality the relinearized
+        solver guaranteed, so the reconstructed vectors are re-orthogonalized
+        (Gram-Schmidt) before use. The real matrix is then projected onto
+        the small subspace spanned by these orthogonalized vectors, exactly
+        as a single Davidson macro-iteration would project it onto the
+        current subspace, and that projected (Rayleigh) matrix is
+        diagonalized. This yields new, variationally optimal Ritz values
+        and Ritz vectors for *all* requested states simultaneously --
+        strictly at least as accurate as finalizing each vector on its own
+        via its individual Rayleigh quotient, since the latter is the
+        special case of this same variational principle restricted to a
+        one-dimensional subspace per state, whereas here every state's
+        trial subspace additionally benefits from the (typically small)
+        admixture of the other states' reconstructed vectors.
+
+        The residual norm of each returned Ritz pair, evaluated against
+        the same real matrix, gives a rigorous a posteriori error bound
+        for free: since the ADC matrix is Hermitian, some true eigenvalue
+        is guaranteed to lie within `residual_norm` of the corresponding
+        Ritz value -- without ever needing a separately converged
+        reference calculation. These residual norms are also exactly the
+        starting point an iterative Kato-Temple refinement would need.
+
+        This method deliberately stops after this single extra step and
+        applies no further correction (e.g. a preconditioned residual
+        update). If a fully converged solution of the real, unapproximated
+        matrix is needed, the right way to get it is a separate call to a
+        Davidson/Lanczos solver on that real matrix, using the returned
+        vectors as its initial guesses -- this reuses the solver's own,
+        already-validated convergence and orthogonalization logic instead
+        of duplicating a bespoke correction step here, and the excellent
+        warm start from this method should mean very few further
+        iterations are needed:
+
+        >>> full, ritz, resnorm = rel.finalize_vectors(ampls, omegas)
+        >>> state = jacobi_davidson(matrix, full, n_ep=len(full))  # doctest: +SKIP
+
+        (`matrix` being the real `AdcMatrix` that `rel` relinearizes, not
+        `rel` itself.)
+
+        Parameters
+        ----------
+        ampls : list of AmplitudeVector
+            Converged eigenvectors of this matrix (e.g. `state.eigenvectors`).
+            Only their explicit-window entries in `complementary_space` are
+            used; anything outside the explicit window is discarded and
+            recomputed from scratch.
+        omegas : array-like
+            The converged eigenvalues belonging to `ampls`, in the same order.
+
+        Returns
+        -------
+        tuple(list, numpy.ndarray, numpy.ndarray)
+            `(full_vectors, ritz_values, residual_norms)`: the full,
+            unit-normalized and mutually orthogonal Ritz vectors; their
+            Ritz values (eigenvalues of the real matrix projected onto the
+            span of the reconstructed vectors), sorted algebraically
+            ascending; and the norm of each corresponding residual against
+            the real matrix.
+        """
+        reconstructed = [self.reconstruct_vector(ampl, omega)
+                         for ampl, omega in zip(ampls, omegas)]
+
+        # Re-orthogonalize: reconstruction folds each vector's eliminated
+        # windows back independently, so the vectors -- mutually orthogonal
+        # before reconstruction -- generally are not anymore afterwards.
+        SS = []
+        for v in reconstructed:
+            coefficients = np.hstack(([1], [-v.dot(w) for w in SS]))
+            v = lincomb(coefficients, [v] + SS, evaluate=True)
+            SS.append(evaluate(v / np.sqrt(v.dot(v))))
 
         # The real, unapproximated matrix-vector product -- self.blocks
         # holds the true blocks (RelinearizedAdcMatrix is constructed with
         # the same block_orders as the matrix it relinearizes), so the
         # base AdcMatrix.matvec (bypassing this class's own override)
         # gives exactly that, with no separate matrix reference needed.
-        a_full = super().matvec(full)
-        ritz_value = full.dot(a_full)
-        residual = a_full - ritz_value * full
-        residual_norm = np.sqrt(residual.dot(residual))
+        base_matvec = super().matvec
+        Ax = [base_matvec(v) for v in SS]
 
-        return full, ritz_value, residual_norm
+        n = len(SS)
+        Ass = np.empty((n, n))
+        for i in range(n):
+            for j in range(i, n):
+                Ass[i, j] = Ass[j, i] = SS[i].dot(Ax[j])
+
+        ritz_values, rvecs = la.eigh(Ass)
+        full_vectors = [lincomb(v, SS, evaluate=True) for v in np.transpose(rvecs)]
+        Ax_ritz = [lincomb(v, Ax, evaluate=True) for v in np.transpose(rvecs)]
+        residual_norms = np.array([
+            np.sqrt((ax - rval * full).dot(ax - rval * full))
+            for ax, rval, full in zip(Ax_ritz, ritz_values, full_vectors)
+        ])
+
+        return full_vectors, ritz_values, residual_norms
 
     def diagonal(self):
         # The eliminated windows are never independent unknowns; report a
