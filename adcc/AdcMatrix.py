@@ -783,6 +783,46 @@ class AdcMatrixProjected(AdcMatrix):
         #      a block_view and then wrap that in an AdcMatrixProjected.
 
 
+def _select_within_cutoff(tensor, cutoff):
+    """
+    Return a list of `(index_tuple, value)` pairs for every canonical
+    element of `tensor` with `|value| <= cutoff`, found via a growing
+    `Tensor.select_n_absmin` search -- `tensor` is never densified via
+    `to_ndarray()`. Cost scales with the number of canonical elements
+    actually within `cutoff` (typically a tiny fraction of `tensor.size`
+    for RelinearizedAdcMatrix's explicit/order-1 tiers, which are
+    designed to stay small -- see the class docstring), not with
+    `tensor.size` itself; this degrades back towards the cost of a full
+    densification only if `cutoff` is set wide enough to select most of
+    the space, which is outside the tiers' intended regime.
+    """
+    if cutoff <= 0 or tensor.size == 0:
+        return []
+    n = min(10, tensor.size)
+    res = tensor.select_n_absmin(n)
+    while (not res or max(abs(v) for _, v in res) <= cutoff) and n < tensor.size:
+        n = max(n + 1, min(tensor.size, 2 * n))
+        res = tensor.select_n_absmin(n)
+    return [(tuple(idx), val) for idx, val in res if abs(val) <= cutoff]
+
+
+def _mask_from_selection(template, selection):
+    """
+    Build a 0.0/1.0 `Tensor` with the same shape/symmetry as `template`,
+    holding 1.0 at exactly the canonical indices in `selection` (as
+    returned by `_select_within_cutoff`) and 0.0 elsewhere.
+    `Tensor.__setitem__` "alters all elements equivalent by symmetry at
+    once", so each of the (few) canonical assignments here transparently
+    fills in every symmetry-equivalent raw element too -- e.g. 76
+    canonical assignments were sufficient to exactly reproduce a
+    32256-element raw mask in testing.
+    """
+    mask = template.zeros_like()
+    for idx, _ in selection:
+        mask[idx] = 1.0
+    return evaluate(mask)
+
+
 class RelinearizedAdcMatrix(AdcMatrix):
     """
     Relinearized ("folded"/"downfolded") ADC matrix: the self-coupling of
@@ -949,7 +989,6 @@ class RelinearizedAdcMatrix(AdcMatrix):
             order=0, intermediates=self.intermediates, variant=variant
         )
         self.diagonal_0 = diagonal_0_block.diagonal
-        self._diag0_arr = getattr(self.diagonal_0, complementary_space).to_ndarray()
 
         self.is_trivial = (order_used == 0)
         if self.is_trivial:
@@ -995,42 +1034,67 @@ class RelinearizedAdcMatrix(AdcMatrix):
         # close to resonance with the highest targeted state, not merely
         # because its bare 0th order energy happens to be small in an
         # absolute sense.
-        screen_arr = np.abs(self._diag0_arr - self.omega_screen)
-        self.mask_active = screen_arr <= self.explicit_width
-        # order1_width is a span added on top of explicit_width, not an
-        # absolute cutoff -- see its class-attribute default comment.
+        #
+        # This never densifies the (potentially astronomically large,
+        # e.g. ppphhh-sized) diagonal: `_select_within_cutoff` finds the
+        # qualifying elements directly in the compressed representation
+        # via a growing `select_n_absmin` search, templated on
+        # self.diagonal_0 for the same reason the mask tensors below are
+        # (see their comment) -- NOT a genuine complementary_space
+        # amplitude tensor, since D0 (and hence any mask derived from it)
+        # is *symmetric*, not antisymmetric, under the index swaps
+        # amplitudes are antisymmetric under. One growing search up to
+        # the larger (order-1) cutoff covers both the explicit and
+        # order-1 tiers; they are then split apart by the smaller
+        # (explicit) cutoff. The order-0 tier -- expected to be the
+        # overwhelming bulk of the space -- is deliberately *not* found
+        # by selection at all: it falls out for free as the complement
+        # `1 - explicit - order1` (valid native Tensor subtraction here,
+        # since these mask tensors are symmetric-, not antisymmetric-,
+        # declared), so its size never limits the cost of this method.
+        space = self.complementary_space
+        template = getattr(self.diagonal_0, space)
+        shifted = evaluate(template - self.omega_screen)
         order1_cutoff = self.explicit_width + self.order1_width
-        mask_order1 = (~self.mask_active) & (screen_arr <= order1_cutoff)
-        mask_order0 = ~(self.mask_active | mask_order1)
-
+        within_order1_cutoff = _select_within_cutoff(shifted, order1_cutoff)
+        active_sel = [(idx, v) for idx, v in within_order1_cutoff
+                      if abs(v) <= self.explicit_width]
+        order1_sel = [(idx, v) for idx, v in within_order1_cutoff
+                      if abs(v) > self.explicit_width]
         if self.is_trivial:
             # V is identically zero, so the 1st order Neumann correction
             # is mathematically a no-op (and v_apply is None, since it is
-            # never needed) -- merge the order-1 tier into order-0.
-            mask_order0 = mask_order0 | mask_order1
-            mask_order1 = np.zeros_like(mask_order1)
+            # never needed) -- merge the order-1 tier into order-0 (i.e.
+            # just don't single it out; the order-0 complement below
+            # picks it up automatically).
+            order1_sel = []
+
+        active_tensor = _mask_from_selection(template, active_sel)
+        self._mask_active_tensor = active_tensor
+        self._mask_inactive_tensor = evaluate(1 - active_tensor)
 
         elimination_windows = []
-        if np.any(mask_order1):
-            elimination_windows.append((mask_order1, 1))
-        if np.any(mask_order0):
-            elimination_windows.append((mask_order0, 0))
+        if order1_sel:
+            order1_tensor = _mask_from_selection(template, order1_sel)
+            elimination_windows.append((order1_tensor, 1))
+            order0_tensor = evaluate(1 - active_tensor - order1_tensor)
+        else:
+            order0_tensor = self._mask_inactive_tensor
+        elimination_windows.append((order0_tensor, 0))
 
-        n_total = self.mask_active.size
-        n_explicit = int(self.mask_active.sum())
+        n_total = template.size
+        n_explicit = int(round(float(active_tensor.dot(active_tensor))))
         self.window_occupancy = {
             "total": n_total,
             "explicit": {"count": n_explicit, "fraction": n_explicit / n_total},
         }
+        descr = [f"{n_explicit}/{n_total} ({n_explicit/n_total*100:.2f}%) explicit"]
         for mask, order in elimination_windows:
-            n = int(mask.sum())
+            n = int(round(float(mask.dot(mask))))
             self.window_occupancy[f"order-{order}"] = {
                 "count": n, "fraction": n / n_total
             }
-
-        descr = [f"{n_explicit}/{n_total} ({n_explicit/n_total*100:.2f}%) explicit"]
-        descr += [f"{int(mask.sum())}/{n_total} ({int(mask.sum())/n_total*100:.2f}%) order-{order}"
-                 for mask, order in elimination_windows]
+            descr.append(f"{n}/{n_total} ({n/n_total*100:.2f}%) order-{order}")
         print(f"RelinearizedAdcMatrix(omega_fixed={self.omega_fixed:.4f},"
               f"{self.complementary_space}): ")
         print(", ".join(descr))
@@ -1040,34 +1104,6 @@ class RelinearizedAdcMatrix(AdcMatrix):
             self.complementary_space, self.diagonal_0, self._v_apply,
             elimination_windows
         )
-
-        # Native Tensor versions of mask_active/~mask_active, built once
-        # here (not per Davidson iteration). Templated on self.diagonal_0
-        # -- NOT a genuine complementary_space amplitude tensor -- because
-        # the mask is a pure function of D0 and is therefore *symmetric*
-        # under the same index swaps amplitudes are *antisymmetric* under
-        # (D0_ijab == D0_jiab, since bare orbital energies don't care
-        # about index order); it matches diagonal_0's own permutation
-        # symmetry exactly, including diagonal_0's (correctly populated)
-        # spin-block structure, which is what a from-scratch `nosym_like`
-        # mask lacks and what actually caused later block applications on
-        # values derived from it to fail with a libtensor bad_symmetry
-        # error ("Incompatible dimensions") -- not the permutation
-        # symmetry, which is a separate thing `antisymmetrise` alone does
-        # not fix. Elementwise-multiplying a genuine antisymmetric
-        # complementary_space tensor by this symmetric mask still yields a
-        # properly antisymmetric (and properly spin-labelled) product:
-        # (A * M)_ijab == A_ijab * M_ijab == -A_jiab * M_jiab
-        # == -(A * M)_jiab whenever M_ijab == M_jiab, which is all that is
-        # ever needed here -- only the *mask* needs to avoid the
-        # amplitude's antisymmetric declaration, not the masked result.
-        template = getattr(self.diagonal_0, self.complementary_space)
-        active = template.zeros_like()
-        active.set_from_ndarray(self.mask_active.astype(float), 1e-14)
-        inactive = template.zeros_like()
-        inactive.set_from_ndarray((~self.mask_active).astype(float), 1e-14)
-        self._mask_active_tensor = evaluate(active)
-        self._mask_inactive_tensor = evaluate(inactive)
 
     def _active_masked(self, v):
         """Return a copy of `v` whose `complementary_space` block is
@@ -1312,13 +1348,23 @@ class RelinearizedAdcMatrix(AdcMatrix):
         # The eliminated windows are never independent unknowns; report a
         # large diagonal there so guesses/preconditioning never favour
         # them (mirrors AdcMatrixProjected's treatment of ignored blocks).
+        #
+        # Built natively via the already-cached mask tensors from
+        # update_omega_guess, rather than to_ndarray()/np.where/
+        # set_from_ndarray: `tensor` here (the real diagonal, at the
+        # matrix's actual order) is -- like self.diagonal_0 -- a genuine
+        # scalar-per-configuration diagonal, hence symmetric (not
+        # antisymmetric) under the same index swaps amplitudes are
+        # antisymmetric under, exactly like _mask_active_tensor/
+        # _mask_inactive_tensor -- so this combination stays entirely
+        # within the "symmetric diagonal" family and needs no
+        # densification at all.
         out = super().diagonal()
         space = self.complementary_space
         tensor = getattr(out, space)
-        arr = tensor.to_ndarray()
-        arr = np.where(self.mask_active, arr, 1e5)
-        new_tensor = tensor.zeros_like()
-        new_tensor.set_from_ndarray(arr, 1e-14)
+        new_tensor = evaluate(
+            tensor * self._mask_active_tensor + 1e5 * self._mask_inactive_tensor
+        )
         return AmplitudeVector(**{
             **{b: t for b, t in out.items() if b != space},
             space: new_tensor,

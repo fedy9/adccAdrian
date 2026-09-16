@@ -20,8 +20,6 @@
 ## along with adcc. If not, see <http://www.gnu.org/licenses/>.
 ##
 ## ---------------------------------------------------------------------
-import numpy as np
-
 from .functions import evaluate
 from .AmplitudeVector import AmplitudeVector
 
@@ -60,11 +58,22 @@ class ComplementaryBlockInverter:
         AmplitudeVector -> AmplitudeVector, the "fluctuation" part V of
         the space_space block (i.e. the actual block used minus its own
         0th order part). Only invoked for windows with `order > 0`.
-    windows : list of (numpy.ndarray of bool, int)
-        List of (mask, order) pairs. `mask` selects the part of the
-        `space` tensor treated at the given Neumann `order` (>= 0). The
-        masks must be pairwise disjoint; they need not cover the full
-        space (uncovered elements are left at zero).
+    windows : list of (Tensor, int)
+        List of (mask, order) pairs. `mask` is a native 0.0/1.0 `Tensor`
+        (same shape/symmetry as `diagonal_0`'s `space` block -- e.g. as
+        built by `_mask_from_selection` in AdcMatrix.py, NOT a genuine
+        `space` amplitude tensor: masks derived from the diagonal are
+        symmetric, not antisymmetric, under the swaps amplitudes are
+        antisymmetric under) selecting the part of the `space` tensor
+        treated at the given Neumann `order` (>= 0). The masks must be
+        pairwise disjoint (checked via their mutual dot product, which is
+        exactly the raw element overlap count for 0.0/1.0 masks); they
+        need not cover the full space (uncovered elements are left at
+        zero). Masks are never densified via `to_ndarray()` here or
+        anywhere downstream in `apply`/`_masked` -- for a window that
+        covers most of the space (the intended role of the order-0
+        window), building it as a raw NumPy array would itself be the
+        same kind of blow-up this class exists to avoid.
     """
 
     def __init__(self, space, diagonal_0, v_apply, windows):
@@ -73,29 +82,14 @@ class ComplementaryBlockInverter:
                 raise ValueError("The Neumann expansion order must be >= 0.")
         for i, (mask_i, _) in enumerate(windows):
             for mask_j, _ in windows[i + 1:]:
-                if np.any(mask_i & mask_j):
+                overlap = float(mask_i.dot(mask_j))
+                if abs(overlap) > 1e-8:
                     raise ValueError("The windows passed to ComplementaryBlockInverter "
                                      "must be pairwise disjoint.")
         self.space = space
         self.diagonal_0 = diagonal_0
         self.v_apply = v_apply
-        self.windows = windows
-
-        # Native Tensor version of each window's mask, built once here
-        # (not per Davidson iteration), templated on diagonal_0 rather
-        # than on a genuine `space` amplitude tensor -- see
-        # RelinearizedAdcMatrix.update_omega_guess for the full argument:
-        # the mask is a pure function of D0 and is symmetric (not
-        # antisymmetric) under the same swaps amplitudes are antisymmetric
-        # under, and diagonal_0's tensor already carries the matching
-        # (correctly spin-labelled) declared symmetry, unlike a
-        # `nosym_like` mask would.
-        template = getattr(diagonal_0, space)
-        self._mask_tensors = []
-        for mask_arr, _ in windows:
-            mask_tensor = template.zeros_like()
-            mask_tensor.set_from_ndarray(mask_arr.astype(float), 1e-14)
-            self._mask_tensors.append(evaluate(mask_tensor))
+        self.windows = [(evaluate(mask), order) for mask, order in windows]
 
     def _masked(self, ampl, iwindow):
         """
@@ -104,7 +98,8 @@ class ComplementaryBlockInverter:
         `iwindow`. Any other blocks `ampl` might carry are dropped.
         """
         tensor = getattr(ampl, self.space)
-        out = evaluate(tensor * self._mask_tensors[iwindow])
+        mask, _ = self.windows[iwindow]
+        out = evaluate(tensor * mask)
         return AmplitudeVector(**{self.space: out})
 
     def apply(self, numerator, omega):
