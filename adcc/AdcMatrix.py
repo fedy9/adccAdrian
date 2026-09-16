@@ -783,18 +783,23 @@ class AdcMatrixProjected(AdcMatrix):
         #      a block_view and then wrap that in an AdcMatrixProjected.
 
 
-def _select_within_cutoff(tensor, cutoff):
+def _select_within_cutoff_via_search(tensor, cutoff):
     """
     Return a list of `(index_tuple, value)` pairs for every canonical
     element of `tensor` with `|value| <= cutoff`, found via a growing
     `Tensor.select_n_absmin` search -- `tensor` is never densified via
     `to_ndarray()`. Cost scales with the number of canonical elements
-    actually within `cutoff` (typically a tiny fraction of `tensor.size`
-    for RelinearizedAdcMatrix's explicit/order-1 tiers, which are
-    designed to stay small -- see the class docstring), not with
-    `tensor.size` itself; this degrades back towards the cost of a full
-    densification only if `cutoff` is set wide enough to select most of
-    the space, which is outside the tiers' intended regime.
+    actually within `cutoff`, not with `tensor.size` itself -- but
+    `Tensor.select_n_absmin` (and the `libtensor::gen_bto_select` it
+    calls into) is a plain sequential loop over the tensor's non-zero
+    symmetry blocks with no OpenMP parallelisation, unlike the
+    contraction routines that dominate the rest of an ADC(n) run, and
+    its cost per call does not scale purely linearly with the requested
+    `n` either (it re-scans blocks from scratch each call). This is a
+    fallback, used by `_select_within_cutoff` only when the faster
+    `_select_within_cutoff_via_energies` path below cannot be used (e.g.
+    CVS, where the occupied axes span more than one MO space) -- see
+    that function's docstring for why it is normally preferred.
     """
     if cutoff <= 0 or tensor.size == 0:
         return []
@@ -806,19 +811,149 @@ def _select_within_cutoff(tensor, cutoff):
     return [(tuple(idx), val) for idx, val in res if abs(val) <= cutoff]
 
 
+def _select_within_cutoff_via_energies(tensor, reference_state, axis_spaces,
+                                       omega_screen, cutoff):
+    """
+    Fast path for `_select_within_cutoff`: exploit that a bare (0th
+    order) diagonal like `tensor` is *separable* -- a sum of 1D orbital
+    energies, e.g. `D0_ijkabc = eps_i + eps_j + eps_k - eps_a - eps_b -
+    eps_c` -- to find every canonical element with `|D0 - omega_screen|
+    <= cutoff` using plain vectorised NumPy over those small 1D energy
+    arrays, instead of `Tensor.select_n_absmin`'s unparallelised
+    per-block C++ search over the (potentially far larger) compressed
+    tensor itself.
+
+    Returns `None` (the caller should fall back to
+    `_select_within_cutoff_via_search`) if `axis_spaces` is not a simple
+    "all occupied axes share one MO space label, all virtual axes share
+    another" split -- e.g. under CVS, where occupied axes can span both
+    a core and a valence space. In that simple (default, non-CVS) case,
+    which is what this class is normally used for:
+
+    - the occupied-axis index tuples (e.g. `(i, j, k)`) and virtual-axis
+      index tuples (e.g. `(a, b, c)`) are enumerated *with replacement*
+      (`itertools.combinations_with_replacement`, not `combinations`):
+      repeated indices (e.g. `i == j`) are still valid, distinct
+      elements of this *symmetric*-declared diagonal tensor (unlike a
+      genuine antisymmetric amplitude tensor, nothing forces them to
+      zero) -- using plain `combinations` here silently underselects,
+      which is exactly the kind of bug this needed validating against
+      `to_ndarray()` ground truth for before trusting it;
+    - only the (small) occupied-side sums are iterated in Python; for
+      each one, the matching range of (sorted, precomputed once)
+      virtual-side sums is found via a single vectorised
+      `numpy.searchsorted` call, not a Python-level or per-block search;
+    - `Tensor.is_allowed` is still checked per candidate before it is
+      returned, as a defensive check against any symmetry restriction
+      (e.g. a spin selection rule) this simple energy-sum construction
+      does not itself know about -- in testing this never actually
+      excluded anything for the plain (non-CVS) case, but it is cheap
+      insurance against silently writing to a forbidden index elsewhere.
+    """
+    occ_labels = [label for label in axis_spaces if label.startswith("o")]
+    virt_labels = [label for label in axis_spaces if label.startswith("v")]
+    if len(occ_labels) + len(virt_labels) != len(axis_spaces):
+        return None
+    if len(set(occ_labels)) != 1 or len(set(virt_labels)) != 1:
+        return None
+    r_occ, r_virt = len(occ_labels), len(virt_labels)
+
+    eps_o = reference_state.orbital_energies(occ_labels[0]).to_ndarray()
+    eps_v = reference_state.orbital_energies(virt_labels[0]).to_ndarray()
+    if eps_o.size == 0 or eps_v.size == 0:
+        return []
+
+    occ_idx = np.array(list(
+        itertools.combinations_with_replacement(range(eps_o.size), r_occ)
+    ))
+    virt_idx = np.array(list(
+        itertools.combinations_with_replacement(range(eps_v.size), r_virt)
+    ))
+    occ_sums = eps_o[occ_idx].sum(axis=1)
+    virt_sums = eps_v[virt_idx].sum(axis=1)
+    order = np.argsort(virt_sums)
+    virt_sums_sorted = virt_sums[order]
+
+    lo = occ_sums + omega_screen - cutoff
+    hi = occ_sums + omega_screen + cutoff
+    left = np.searchsorted(virt_sums_sorted, lo, side="left")
+    right = np.searchsorted(virt_sums_sorted, hi, side="right")
+
+    selection = []
+    for oi in range(occ_idx.shape[0]):
+        occ_tuple = tuple(int(x) for x in occ_idx[oi])
+        for pos in range(int(left[oi]), int(right[oi])):
+            vi = order[pos]
+            idx = occ_tuple + tuple(int(x) for x in virt_idx[vi])
+            if not tensor.is_allowed(idx):
+                continue
+            selection.append((idx, float(virt_sums[vi] - occ_sums[oi])))
+    return selection
+
+
+def _select_within_cutoff(template, omega_screen, cutoff,
+                          reference_state=None, axis_spaces=None):
+    """
+    Return a list of `(index_tuple, value)` pairs for every canonical
+    element of the *unshifted* diagonal `template` with
+    `|value - omega_screen| <= cutoff`, without ever densifying
+    `template` via `to_ndarray()`.
+
+    Uses `_select_within_cutoff_via_energies` (fast, vectorised, no
+    dependency on OpenMP/thread count) when `reference_state` and
+    `axis_spaces` are given and the simple single-occ-space/
+    single-virt-space case applies -- it takes `template` only for its
+    `is_allowed` checks, never for its values, since it recomputes
+    everything from 1D orbital energies. Otherwise falls back to
+    `_select_within_cutoff_via_search` (via `Tensor.select_n_absmin`),
+    which needs the *shifted* tensor (it searches for elements closest
+    to zero magnitude, i.e. closest to `omega_screen`), built here via
+    one native (cheap, compressed -- no densification) subtraction.
+    """
+    if cutoff <= 0 or template.size == 0:
+        return []
+    if reference_state is not None and axis_spaces is not None:
+        fast = _select_within_cutoff_via_energies(
+            template, reference_state, axis_spaces, omega_screen, cutoff
+        )
+        if fast is not None:
+            return fast
+    shifted = evaluate(template - omega_screen)
+    # _select_within_cutoff_via_search returns *shifted* values (it
+    # searches the shifted tensor directly); shift back to raw D0 so
+    # both backends agree on what "value" means to the caller.
+    return [(idx, v + omega_screen)
+           for idx, v in _select_within_cutoff_via_search(shifted, cutoff)]
+
+
 def _mask_from_selection(template, selection):
     """
     Build a 0.0/1.0 `Tensor` with the same shape/symmetry as `template`,
     holding 1.0 at exactly the canonical indices in `selection` (as
     returned by `_select_within_cutoff`) and 0.0 elsewhere.
     `Tensor.__setitem__` "alters all elements equivalent by symmetry at
-    once", so each of the (few) canonical assignments here transparently
-    fills in every symmetry-equivalent raw element too -- e.g. 76
-    canonical assignments were sufficient to exactly reproduce a
-    32256-element raw mask in testing.
+    once", so each of the (few) *distinct* canonical assignments here
+    transparently fills in every symmetry-equivalent raw element too.
+
+    `selection` may itself contain many entries that turn out to belong
+    to the same symmetry orbit -- e.g. `_select_within_cutoff_via_energies`
+    enumerates occupied/virtual index tuples combinatorially and does not
+    know about the tensor's full declared symmetry (in particular, not
+    about spin-block equivalences such as the alpha/beta degeneracy of a
+    restricted reference), unlike `Tensor.select_n_absmin`, which
+    already deduplicates by the tensor's actual symmetry group. Since
+    `Tensor.__setitem__` costs roughly 40x what `Tensor.__getitem__`
+    does (measured: ~0.66ms vs ~0.016ms per call), each candidate is
+    read first and the write is skipped once it is already set -- this
+    is always safe (a read of exactly 1.0 proves that orbit is already
+    fully covered, never a guess) and turns what would otherwise be one
+    `__setitem__` per (highly redundant) candidate into one `__setitem__`
+    per *distinct* orbit, plus one cheap `__getitem__` per candidate.
     """
     mask = template.zeros_like()
     for idx, _ in selection:
+        if mask[idx] > 0.5:
+            continue
         mask[idx] = 1.0
     return evaluate(mask)
 
@@ -1037,16 +1172,27 @@ class RelinearizedAdcMatrix(AdcMatrix):
         #
         # This never densifies the (potentially astronomically large,
         # e.g. ppphhh-sized) diagonal: `_select_within_cutoff` finds the
-        # qualifying elements directly in the compressed representation
-        # via a growing `select_n_absmin` search, templated on
-        # self.diagonal_0 for the same reason the mask tensors below are
-        # (see their comment) -- NOT a genuine complementary_space
-        # amplitude tensor, since D0 (and hence any mask derived from it)
-        # is *symmetric*, not antisymmetric, under the index swaps
-        # amplitudes are antisymmetric under. One growing search up to
-        # the larger (order-1) cutoff covers both the explicit and
-        # order-1 tiers; they are then split apart by the smaller
-        # (explicit) cutoff. The order-0 tier -- expected to be the
+        # qualifying elements directly (returning raw, unshifted D0
+        # values), preferring a fast vectorised NumPy computation over
+        # the small 1D orbital energies D0 separates into (see
+        # `_select_within_cutoff_via_energies`) and falling back to a
+        # `select_n_absmin`-based search only when that is not
+        # applicable (e.g. CVS).
+        #
+        # If is_trivial, only ever search up to explicit_width, never
+        # the (generally much wider) order-1 cutoff: order1_sel is
+        # always discarded again for this case (V is identically zero,
+        # so the 1st order Neumann correction is a no-op and v_apply is
+        # never needed -- there is no reason to single out an order-1
+        # tier at all), so searching that far past explicit_width just
+        # to throw the result away was pure waste -- for ADC(4), whose
+        # default complementary_space is trivial, this was previously
+        # the dominant cost of every RelinearizedAdcMatrix construction.
+        # Otherwise, one search up to the larger (order-1) cutoff covers
+        # both the explicit and order-1 tiers; they are then split apart
+        # by the smaller (explicit) cutoff.
+        #
+        # Either way, the order-0 tier -- expected to be the
         # overwhelming bulk of the space -- is deliberately *not* found
         # by selection at all: it falls out for free as the complement
         # `1 - explicit - order1` (valid native Tensor subtraction here,
@@ -1054,20 +1200,23 @@ class RelinearizedAdcMatrix(AdcMatrix):
         # declared), so its size never limits the cost of this method.
         space = self.complementary_space
         template = getattr(self.diagonal_0, space)
-        shifted = evaluate(template - self.omega_screen)
-        order1_cutoff = self.explicit_width + self.order1_width
-        within_order1_cutoff = _select_within_cutoff(shifted, order1_cutoff)
-        active_sel = [(idx, v) for idx, v in within_order1_cutoff
-                      if abs(v) <= self.explicit_width]
-        order1_sel = [(idx, v) for idx, v in within_order1_cutoff
-                      if abs(v) > self.explicit_width]
+        axis_spaces = self.axis_spaces[space]
         if self.is_trivial:
-            # V is identically zero, so the 1st order Neumann correction
-            # is mathematically a no-op (and v_apply is None, since it is
-            # never needed) -- merge the order-1 tier into order-0 (i.e.
-            # just don't single it out; the order-0 complement below
-            # picks it up automatically).
+            active_sel = _select_within_cutoff(
+                template, self.omega_screen, self.explicit_width,
+                reference_state=self.reference_state, axis_spaces=axis_spaces
+            )
             order1_sel = []
+        else:
+            order1_cutoff = self.explicit_width + self.order1_width
+            within_order1_cutoff = _select_within_cutoff(
+                template, self.omega_screen, order1_cutoff,
+                reference_state=self.reference_state, axis_spaces=axis_spaces
+            )
+            active_sel = [(idx, v) for idx, v in within_order1_cutoff
+                          if abs(v - self.omega_screen) <= self.explicit_width]
+            order1_sel = [(idx, v) for idx, v in within_order1_cutoff
+                          if abs(v - self.omega_screen) > self.explicit_width]
 
         active_tensor = _mask_from_selection(template, active_sel)
         self._mask_active_tensor = active_tensor
