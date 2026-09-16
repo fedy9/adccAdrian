@@ -1041,16 +1041,43 @@ class RelinearizedAdcMatrix(AdcMatrix):
             elimination_windows
         )
 
+        # Native Tensor versions of mask_active/~mask_active, built once
+        # here (not per Davidson iteration). Templated on self.diagonal_0
+        # -- NOT a genuine complementary_space amplitude tensor -- because
+        # the mask is a pure function of D0 and is therefore *symmetric*
+        # under the same index swaps amplitudes are *antisymmetric* under
+        # (D0_ijab == D0_jiab, since bare orbital energies don't care
+        # about index order); it matches diagonal_0's own permutation
+        # symmetry exactly, including diagonal_0's (correctly populated)
+        # spin-block structure, which is what a from-scratch `nosym_like`
+        # mask lacks and what actually caused later block applications on
+        # values derived from it to fail with a libtensor bad_symmetry
+        # error ("Incompatible dimensions") -- not the permutation
+        # symmetry, which is a separate thing `antisymmetrise` alone does
+        # not fix. Elementwise-multiplying a genuine antisymmetric
+        # complementary_space tensor by this symmetric mask still yields a
+        # properly antisymmetric (and properly spin-labelled) product:
+        # (A * M)_ijab == A_ijab * M_ijab == -A_jiab * M_jiab
+        # == -(A * M)_jiab whenever M_ijab == M_jiab, which is all that is
+        # ever needed here -- only the *mask* needs to avoid the
+        # amplitude's antisymmetric declaration, not the masked result.
+        template = getattr(self.diagonal_0, self.complementary_space)
+        active = template.zeros_like()
+        active.set_from_ndarray(self.mask_active.astype(float), 1e-14)
+        inactive = template.zeros_like()
+        inactive.set_from_ndarray((~self.mask_active).astype(float), 1e-14)
+        self._mask_active_tensor = evaluate(active)
+        self._mask_inactive_tensor = evaluate(inactive)
+
     def _active_masked(self, v):
         """Return a copy of `v` whose `complementary_space` block is
         restricted to the explicit (mask_active) configurations -- never
         trust whatever the eliminated windows of an input vector happen to
         hold, they are always recomputed fresh, never stored."""
         v_active = v.copy()
-        active_tensor = getattr(v_active, self.complementary_space)
-        active_tensor.set_from_ndarray(
-            active_tensor.to_ndarray() * self.mask_active, 1e-14
-        )
+        space = self.complementary_space
+        active_tensor = getattr(v_active, space)
+        v_active[space] = evaluate(active_tensor * self._mask_active_tensor)
         return v_active
 
     def _build_numerator(self, v_active):
@@ -1076,35 +1103,31 @@ class RelinearizedAdcMatrix(AdcMatrix):
         for name, block_fn in self.blocks.items():
             if name != space_space:
                 result += block_fn(v_active)
-
-        numerator_arr = getattr(result, space).to_ndarray().copy()
+        external = evaluate(getattr(result, space))
 
         # The real, unapproximated complementary block applied to the
         # active part: its window-1 output is window-1's own (exact)
         # self-coupling; its window-2/3 output is the direct
         # active->inactive coupling (only used if include_coupling).
-        self_coupling_arr = getattr(
-            self.blocks[space_space](v_active), space
-        ).to_ndarray()
+        self_coupling = evaluate(
+            getattr(self.blocks[space_space](v_active), space)
+        )
 
         # The `space` output only ever represents window-1 (explicit)
         # unknowns -- windows 2+3 are not independent degrees of freedom
         # and must never appear in the returned vector, even transiently
         # via the "external" contribution computed above.
-        result_space = getattr(result, space)
-        result_space.set_from_ndarray(
-            result_space.to_ndarray() * self.mask_active
-            + self_coupling_arr * self.mask_active,
-            1e-14
+        result[space] = evaluate(
+            self._mask_active_tensor * (external + self_coupling)
         )
 
         if self.include_coupling:
-            numerator_arr += self_coupling_arr * (~self.mask_active)
-        numerator_arr *= (~self.mask_active)
-        numerator = AmplitudeVector(
-            **{space: getattr(v_active, space).zeros_like()}
-        )
-        getattr(numerator, space).set_from_ndarray(numerator_arr, 1e-14)
+            numerator_tensor = evaluate(
+                self._mask_inactive_tensor * (external + self_coupling)
+            )
+        else:
+            numerator_tensor = evaluate(self._mask_inactive_tensor * external)
+        numerator = AmplitudeVector(**{space: numerator_tensor})
 
         return numerator, result
 
@@ -1123,12 +1146,12 @@ class RelinearizedAdcMatrix(AdcMatrix):
                 result += block_fn(v_compl)
 
         if self.include_coupling:
-            fed_back = getattr(
-                self.blocks[space_space](v_compl), space
-            ).to_ndarray()
+            fed_back = evaluate(
+                getattr(self.blocks[space_space](v_compl), space)
+            )
             result_space = getattr(result, space)
-            result_space.set_from_ndarray(
-                result_space.to_ndarray() + fed_back * self.mask_active, 1e-14
+            result[space] = evaluate(
+                result_space + fed_back * self._mask_active_tensor
             )
 
         return result

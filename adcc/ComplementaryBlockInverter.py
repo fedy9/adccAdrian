@@ -81,16 +81,30 @@ class ComplementaryBlockInverter:
         self.v_apply = v_apply
         self.windows = windows
 
-    def _masked(self, ampl, mask):
+        # Native Tensor version of each window's mask, built once here
+        # (not per Davidson iteration), templated on diagonal_0 rather
+        # than on a genuine `space` amplitude tensor -- see
+        # RelinearizedAdcMatrix.update_omega_guess for the full argument:
+        # the mask is a pure function of D0 and is symmetric (not
+        # antisymmetric) under the same swaps amplitudes are antisymmetric
+        # under, and diagonal_0's tensor already carries the matching
+        # (correctly spin-labelled) declared symmetry, unlike a
+        # `nosym_like` mask would.
+        template = getattr(diagonal_0, space)
+        self._mask_tensors = []
+        for mask_arr, _ in windows:
+            mask_tensor = template.zeros_like()
+            mask_tensor.set_from_ndarray(mask_arr.astype(float), 1e-14)
+            self._mask_tensors.append(evaluate(mask_tensor))
+
+    def _masked(self, ampl, iwindow):
         """
         Return a new single-block (`space`-only) AmplitudeVector holding
-        the `space` block of `ampl`, restricted to `mask`. Any other
-        blocks `ampl` might carry are dropped.
+        the `space` block of `ampl`, restricted to the mask of window
+        `iwindow`. Any other blocks `ampl` might carry are dropped.
         """
         tensor = getattr(ampl, self.space)
-        arr = tensor.to_ndarray()
-        out = tensor.zeros_like()
-        out.set_from_ndarray(arr * mask, 1e-14)
+        out = evaluate(tensor * self._mask_tensors[iwindow])
         return AmplitudeVector(**{self.space: out})
 
     def apply(self, numerator, omega):
@@ -102,11 +116,11 @@ class ComplementaryBlockInverter:
 
         tensor = getattr(numerator, self.space)
         res = AmplitudeVector(**{self.space: tensor.zeros_like()})
-        for mask, order in self.windows:
-            term = evaluate(self._masked(numerator, mask) / d_shifted)
+        for iwindow, (mask, order) in enumerate(self.windows):
+            term = evaluate(self._masked(numerator, iwindow) / d_shifted)
             window_res = term.copy()
             for _ in range(order):
-                vterm = self._masked(self.v_apply(term), mask)
+                vterm = self._masked(self.v_apply(term), iwindow)
                 term = evaluate(vterm / d_shifted)
                 window_res += term
             res += window_res
