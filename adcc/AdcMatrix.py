@@ -1457,14 +1457,22 @@ class RelinearizedAdcMatrix(AdcMatrix):
             ascending; and the norm of each corresponding residual against
             the real matrix.
         """
-        reconstructed = [self.reconstruct_vector(ampl, omega)
-                         for ampl, omega in zip(ampls, omegas)]
-
         # Re-orthogonalize: reconstruction folds each vector's eliminated
         # windows back independently, so the vectors -- mutually orthogonal
         # before reconstruction -- generally are not anymore afterwards.
+        #
+        # Reconstructed and orthogonalized in the same loop, rather than
+        # building the full list of raw reconstructed vectors up front and
+        # only then looping over it to fill SS: each raw reconstructed
+        # vector is only ever needed once, to build its own SS entry, so
+        # this never holds both the complete raw list and the complete
+        # orthogonalized one (`2 * n_states` full-size vectors, each
+        # potentially as large as the complementary space, e.g. triples)
+        # at the same time -- only SS itself (`n_states` of them) plus one
+        # transient extra.
         SS = []
-        for v in reconstructed:
+        for ampl, omega in zip(ampls, omegas):
+            v = self.reconstruct_vector(ampl, omega)
             coefficients = np.hstack(([1], [-v.dot(w) for w in SS]))
             v = lincomb(coefficients, [v] + SS, evaluate=True)
             SS.append(evaluate(v / np.sqrt(v.dot(v))))
@@ -1485,7 +1493,9 @@ class RelinearizedAdcMatrix(AdcMatrix):
 
         ritz_values, rvecs = la.eigh(Ass)
         full_vectors = [lincomb(v, SS, evaluate=True) for v in np.transpose(rvecs)]
+        del SS  # superseded by full_vectors; no longer needed
         Ax_ritz = [lincomb(v, Ax, evaluate=True) for v in np.transpose(rvecs)]
+        del Ax  # superseded by Ax_ritz; no longer needed
         residual_norms = np.array([
             np.sqrt((ax - rval * full).dot(ax - rval * full))
             for ax, rval, full in zip(Ax_ritz, ritz_values, full_vectors)
