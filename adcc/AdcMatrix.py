@@ -1381,12 +1381,12 @@ class RelinearizedAdcMatrix(AdcMatrix):
         numerator, _ = self._build_numerator(v_active)
         v_compl = self.inverter.apply(numerator, omega)
 
+        # Native Tensor addition here, never to_ndarray()/set_from_ndarray:
+        # `space` can be astronomically large (e.g. a triples space), and
+        # both operands already live in the same (anti)symmetric-declared
+        # tensor format, so there is nothing a dense round-trip would buy.
         full = v_active.copy()
-        full_space = getattr(full, space)
-        full_space.set_from_ndarray(
-            full_space.to_ndarray() + getattr(v_compl, space).to_ndarray(),
-            1e-14
-        )
+        full[space] = evaluate(getattr(full, space) + getattr(v_compl, space))
         return full / np.sqrt(full.dot(full))
 
     def finalize_vectors(self, ampls, omegas):
