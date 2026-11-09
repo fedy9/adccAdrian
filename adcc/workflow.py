@@ -148,8 +148,8 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
         If `True`, solve a :class:`adcc.RelinearizedAdcMatrix` built from
         the ADC matrix instead. Without `guess_energies`, `omega_guess` is
         estimated from the diagonal energies of the first `n_states`
-        internal guess vectors. Default `False`. Has no effect if `data_or_matrix` already
-        is a `RelinearizedAdcMatrix`.
+        internal guess vectors. Default `False`. Has no effect if
+        `data_or_matrix` already is a `RelinearizedAdcMatrix`.
 
     finalize_relinearized : bool, optional
         Only relevant when solving a :class:`adcc.RelinearizedAdcMatrix`
@@ -271,8 +271,7 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
         occupancy = matrix.window_occupancy
         print(f"RelinearizedAdcMatrix(omega_fixed={matrix.omega_fixed:.4f}, "
               f"{matrix.complementary_space}): " + ", ".join(
-                  f"{w['count']}/{occupancy['total']} "
-                  f"({100 * w['fraction']:.2f}%) {name}"
+                  f"{100 * w['fraction']:.2f}% {name}"
                   for name, w in occupancy.items() if name != "total"
               ), file=output)
 
@@ -499,8 +498,13 @@ def diagonalise_adcmatrix(matrix, n_states, kind, eigensolver="davidson",
                 singles_only=("pphh" not in matrix.axis_blocks),
                 n_guesses_per_state=n_guesses_per_state
             )
+        # A relinearized matrix offers only singles and explicit doubles
+        # as guesses, possibly fewer than requested; n_states suffice.
+        min_guesses = (n_states if isinstance(matrix, RelinearizedAdcMatrix)
+                       else None)
         guesses = obtain_guesses_by_inspection(matrix, n_guesses, kind,
-                                               n_guesses_doubles)
+                                               n_guesses_doubles,
+                                               min_guesses=min_guesses)
     else:
         if len(guesses) < n_states:
             raise InputError("Less guesses provided via guesses (== {}) "
@@ -523,12 +527,19 @@ def diagonalise_adcmatrix(matrix, n_states, kind, eigensolver="davidson",
 def estimate_omega_guess(matrix, n_states, kind):
     """
     Automatic `omega_guess` for `relin=True`: the diagonal energies of
-    `n_states` cheap singles-only guesses, obtained as the solver itself
-    would. Internal function called from run_adc.
+    `n_states` guesses, obtained as the solver itself would, but from the
+    actual diagonal of the RelinearizedAdcMatrix `matrix`, not from its
+    relinearized one (which hides the eliminated configurations, at this
+    point those of the placeholder `omega_guess`). Doubles fill up if
+    there are too few singles guesses. Internal function called from
+    run_adc.
     """
-    guesses = obtain_guesses_by_inspection(matrix, n_states, kind,
-                                           n_guesses_doubles=0)
-    diagonal = matrix.diagonal()
+    actual = AdcMatrix(matrix.method, matrix.ground_state,
+                       block_orders=matrix.block_orders,
+                       intermediates=matrix.intermediates,
+                       diagonal_precomputed=AdcMatrix.diagonal(matrix))
+    guesses = obtain_guesses_by_inspection(actual, n_states, kind)
+    diagonal = actual.diagonal()
     return np.array([g.dot(diagonal * g) for g in guesses])
 
 
@@ -635,12 +646,15 @@ def estimate_n_guesses(matrix, n_states, singles_only=True,
     return max(n_states, n_guesses)
 
 
-def obtain_guesses_by_inspection(matrix, n_guesses, kind, n_guesses_doubles=None):
+def obtain_guesses_by_inspection(matrix, n_guesses, kind, n_guesses_doubles=None,
+                                 min_guesses=None):
     """
     Obtain guesses by inspecting the diagonal matrix elements.
     If n_guesses_doubles is not None, this is number is always adhered to.
     Otherwise the number of doubles guesses is adjusted to fill up whatever
     the singles guesses cannot provide to reach n_guesses.
+    If min_guesses is given, fewer than n_guesses (but at least
+    min_guesses) guesses are accepted.
     Internal function called from run_adc.
     """
     if n_guesses_doubles is not None and n_guesses_doubles > 0 \
@@ -671,9 +685,15 @@ def obtain_guesses_by_inspection(matrix, n_guesses, kind, n_guesses_doubles=None
                                              block="pphh")
 
     total_guesses = singles_guesses + doubles_guesses
-    if len(total_guesses) < n_guesses:
+    n_required = n_guesses if min_guesses is None else min_guesses
+    if len(total_guesses) < n_required:
+        hint = ""
+        if isinstance(matrix, RelinearizedAdcMatrix):
+            hint = (". Only singles and explicit doubles of the relinearized "
+                    "matrix qualify; increase explicit_width")
         raise InputError("Less guesses found than requested: {} found, "
-                         "{} requested".format(len(total_guesses), n_guesses))
+                         "{} requested{}".format(len(total_guesses), n_required,
+                                                 hint))
     return total_guesses
 
 

@@ -158,6 +158,24 @@ def test_newton_bracketed_by_lowest_pole(guess_energies):
     assert root_bracketed == pytest.approx(root, abs=1e-10)
 
 
+@pytest.mark.parametrize("case,method,n_singlets", [
+    ("gen", "adc2", 12),     # more states than singles guesses
+    ("gen", "adc2", 6),      # fewer guesses than requested by default
+    ("fv", "adc2", 3),
+    ("cvs", "cvs-adc2", 2),
+    ("cvs", "cvs-adc2", 3),
+])
+def test_few_guesses(case, method, n_singlets):
+    refstate = testdata_cache.refstate("h2o_sto3g", case=case)
+    matrix = adcc.AdcMatrix(method, adcc.LazyMp(refstate))
+    exact = adcc.run_adc(matrix, n_singlets=n_singlets, conv_tol=1e-8,
+                         output=None)
+    final = adcc.run_adc(matrix, n_singlets=n_singlets, conv_tol=1e-8,
+                         relin=True, output=None)
+    assert final.excitation_energy == pytest.approx(exact.excitation_energy,
+                                                    abs=1e-4)
+
+
 def test_extra_terms():
     matrix = adc2_matrix("h2o_sto3g")
     ones = matrix.diagonal().ones_like()
