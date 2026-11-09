@@ -917,6 +917,11 @@ class RelinearizedAdcMatrix(AdcMatrix):
     solving (as `run_adc` does by default) to get the self-consistent
     energy of each state and its full-space eigenvector.
 
+    `matvec` never populates the eliminated configurations, so guess
+    vectors must not have components there (they span a zero eigenspace).
+    `run_adc` projects user guesses accordingly; when calling a solver
+    directly, pass guesses restricted to the explicit configurations.
+
     Only a 0th order complementary block (e.g. the default space of
     ADC(2) and ADC(4)) is supported, for which `A_QQ = D` is diagonal and
     the elimination is exact at a given energy. Code paths for higher
@@ -1092,6 +1097,29 @@ class RelinearizedAdcMatrix(AdcMatrix):
             self.complementary_space, self.diagonal_0, self._v_apply,
             elimination_windows
         )
+        self._lowest_eliminated_d0 = self._find_lowest_eliminated_d0()
+
+    def _find_lowest_eliminated_d0(self):
+        """Lowest bare diagonal `D0` of the eliminated configurations
+        (`inf` if there are none), i.e. the lowest pole of the fold. Found
+        by searching windows of growing width above the explicit window,
+        which contains every lower configuration."""
+        occupancy = self.window_occupancy
+        if occupancy["explicit"]["count"] == occupancy["total"]:
+            return np.inf
+        space = self.complementary_space
+        explicit_top = self.omega_screen + self.explicit_width
+        width = 0.1
+        while width < 1e4:
+            found = [v for _, v in _select_within_cutoff(
+                getattr(self.diagonal_0, space), explicit_top + width / 2,
+                width / 2, reference_state=self.reference_state,
+                axis_spaces=self.axis_spaces[space]
+            ) if v > explicit_top]
+            if found:
+                return min(found)
+            width *= 2
+        return np.inf
 
     def _active_masked(self, v):
         """Copy of `v` with its `complementary_space` block restricted to
@@ -1194,12 +1222,16 @@ class RelinearizedAdcMatrix(AdcMatrix):
         -------
         tuple(float, AmplitudeVector, int)
             The self-consistent energy, the full, unit-normalized
-            eigenvector and the number of Newton steps taken.
+            eigenvector and the number of Newton steps taken. For a state
+            not described by the fold (see `_self_consistent_energy`), the
+            raw `omega` and `ampl` with zero steps, and a warning.
         """
         x_p = self._active_masked(ampl)
         b = self._coupling_into_eliminated(x_p)
         energy, x_q, n_steps = self._self_consistent_energy(x_p, b, omega,
                                                             output=output)
+        if x_q is None:
+            return omega, ampl, 0
         return energy, self._unfold(x_p, x_q), n_steps
 
     def _coupling_into_eliminated(self, v_active):
@@ -1253,11 +1285,16 @@ class RelinearizedAdcMatrix(AdcMatrix):
         part at `omega_fixed` (per unit-normalized `x_P`). Each step costs
         one divide by `w - D` and two dot products over the eliminated
         space. Iterated until a step is below `tol` (Ha), typically 2
-        steps; as `g' >= 1`, `|w - root| <= |g(w)|`. Since every
-        eliminated `D` lies above the targeted states (one-sided windows),
-        `g(w) = w - a - h(w)` is increasing and convex below the lowest
-        eliminated `D`, so the root there is unique and Newton converges
-        without safeguards.
+        steps; as `g' >= 1`, `|w - root| <= |g(w)|`.
+
+        Below the lowest eliminated `D` (the lowest pole), `g(w) = w - a -
+        h(w)` increases from -inf to +inf and is convex, so it has exactly
+        one root there. Newton steps that would leave the bracket known to
+        contain it are replaced by bisection. If `omega` itself lies at or
+        above the lowest pole, the state is not described by the fold
+        (its near-degenerate configurations were eliminated), and the raw
+        `omega` is kept with a warning; likewise if the iteration ends at
+        the pole (a pole without coupling, `b = 0` there).
 
         If `output` is given, the starting value and every Newton step are
         printed to it, each with its change from the previous value (the
@@ -1270,8 +1307,17 @@ class RelinearizedAdcMatrix(AdcMatrix):
             `x_Q = (w - D)^{-1} b` from the last Newton step, evaluated
             at an energy within `tol` of the returned one (so no further
             evaluation is needed to unfold); and the number of Newton
-            steps taken.
+            steps taken. `(omega, None, 0)` if the raw `omega` is kept.
         """
+        pole = self._lowest_eliminated_d0
+        if omega >= pole:
+            warnings.warn(f"Relinearized eigenvalue {omega:.6f} lies at or "
+                          f"above the lowest eliminated configuration "
+                          f"(D = {pole:.6f}), so the state is not described "
+                          f"by the fold and is kept unchanged. Increase "
+                          f"explicit_width or the omega guesses.")
+            return omega, None, 0
+
         omega_fixed = self.omega_fixed
         norm2 = v_active.dot(v_active)
         x_q = self.inverter.apply(numerator, omega_fixed)
@@ -1280,47 +1326,46 @@ class RelinearizedAdcMatrix(AdcMatrix):
         a = omega - numerator.dot(x_q) / norm2
         d = omega - omega_fixed
         w = float(omega_fixed + d / (1 + n) + s * d**2 / (1 + n)**3)
+        if w >= pole:
+            w = 0.5 * (omega + pole)
         if output is not None:
             print(f"    2nd order   omega = {w:.10f}   "
                   f"change = {w - omega:+.4e}", file=output)
 
+        lower, upper = -np.inf, pole  # bracket of the root
         for n_steps in range(1, maxiter + 1):
             x_q = self.inverter.apply(numerator, w)
             g = w - a - numerator.dot(x_q) / norm2
-            step = g / (1 + x_q.dot(x_q) / norm2)
-            w = float(w - step)
+            w_new = float(w - g / (1 + x_q.dot(x_q) / norm2))
+            # From the right (g > 0), convexity keeps Newton right of the
+            # root; from the left, a step can overshoot the pole.
+            bisected = False
+            if g > 0:
+                upper = w
+            else:
+                lower = w
+                if w_new >= upper:
+                    w_new = 0.5 * (lower + upper)
+                    bisected = True
+            step, w = w - w_new, w_new
             if output is not None:
                 print(f"    Newton {n_steps:3d}  omega = {w:.10f}   "
-                      f"change = {-step:+.4e}", file=output)
+                      f"change = {-step:+.4e}"
+                      + ("   (bisection)" if bisected else ""), file=output)
             if abs(step) < tol:
                 break
         else:
             warnings.warn(f"Self-consistent energy not converged within "
                           f"{maxiter} Newton steps (last step {step:.2e}).")
-        self._warn_if_above_eliminated(w)
-        return w, x_q, n_steps
 
-    def _warn_if_above_eliminated(self, w):
-        """Warn if `w` lies above an eliminated configuration, i.e. if a
-        pole of `(w - D)^{-1}` was crossed. Only possible above
-        `omega_screen + explicit_width`, below which everything is
-        explicit, so the (cheap) search is restricted to that range."""
-        explicit_top = self.omega_screen + self.explicit_width
-        if w <= explicit_top:
-            return
-        space = self.complementary_space
-        below = [v for _, v in _select_within_cutoff(
-            getattr(self.diagonal_0, space), (explicit_top + w) / 2,
-            (w - explicit_top) / 2, reference_state=self.reference_state,
-            axis_spaces=self.axis_spaces[space]
-        ) if v > explicit_top]
-        if below:
-            warnings.warn(
-                f"Self-consistent energy {w:.6f} lies above {len(below)} "
-                f"eliminated configuration(s) (lowest D = {min(below):.6f}); "
-                f"it is unreliable. Increase explicit_width or the omega "
-                f"guesses."
-            )
+        if pole - w < tol:
+            warnings.warn(f"Self-consistent energy of the relinearized "
+                          f"eigenvalue {omega:.6f} ends at the lowest "
+                          f"eliminated configuration (D = {pole:.6f}), so the "
+                          f"state is kept unchanged. Increase explicit_width "
+                          f"or the omega guesses.")
+            return omega, None, 0
+        return w, x_q, n_steps
 
     def _unfold(self, v_active, x_q):
         """Full, unit-normalized eigenvector: the explicit part `v_active`

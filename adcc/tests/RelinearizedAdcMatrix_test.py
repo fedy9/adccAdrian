@@ -79,6 +79,84 @@ class TestRelinearizedAdc2:
             assert eliminated.dot(eliminated) == pytest.approx(0.0, abs=1e-24)
 
 
+@pytest.mark.parametrize("system", ["h2o_def2tzvp"])
+def test_states_sorted_after_finalize(system):
+    # A guess energy far above the states makes their corrections differ
+    # enough to swap close-lying states before sorting.
+    matrix = adc2_matrix(system)
+    exact = adcc.run_adc(matrix, n_singlets=12, conv_tol=1e-8, output=None)
+    final = adcc.run_adc(matrix, n_singlets=12, conv_tol=1e-8, relin=True,
+                         guess_energies=1.5, output=None)
+    assert np.all(np.diff(final.excitation_energy) >= 0)
+    assert final.excitation_energy == pytest.approx(exact.excitation_energy,
+                                                    abs=1e-3)
+
+
+def test_guesses_require_guess_energies():
+    matrix = adc2_matrix("h2o_sto3g")
+    exact = adcc.run_adc(matrix, n_singlets=2, conv_tol=1e-8, output=None)
+    with pytest.raises(adcc.InputError):
+        adcc.run_adc(matrix, n_singlets=2, relin=True,
+                     guesses=exact.excitation_vector, output=None)
+
+
+@pytest.mark.parametrize("system,guess_energies", [("h2o_sto3g", 0.5),
+                                                   ("h2o_def2tzvp", 0.35)])
+def test_user_guesses_with_eliminated_components(system, guess_energies):
+    # Exact ADC(2) vectors have components in the eliminated doubles; unless
+    # projected away, these converge to spurious zero eigenvalues.
+    matrix = adc2_matrix(system)
+    exact = adcc.run_adc(matrix, n_singlets=3, conv_tol=1e-8, output=None)
+    guesses = [v.copy() for v in exact.excitation_vector]
+    final = adcc.run_adc(matrix, n_singlets=3, conv_tol=1e-8, relin=True,
+                         guesses=guesses, guess_energies=guess_energies,
+                         output=None)
+    assert final.excitation_energy == pytest.approx(exact.excitation_energy,
+                                                    abs=1e-4)
+
+
+def test_states_above_lowest_eliminated_configuration_kept_raw():
+    # Without explicit configurations, the doubles-dominated exact states 9
+    # and 10 (just above the lowest eliminated D0) are not part of the fold;
+    # its 9th and 10th eigenvalues lie far above and must be kept as they are.
+    matrix = adc2_matrix("h2o_sto3g")
+    kwargs = dict(n_singlets=10, n_guesses=10, conv_tol=1e-8, relin=True,
+                  guess_energies=0.5, explicit_width=0.0, output=None)
+    exact = adcc.run_adc(matrix, n_singlets=10, n_guesses=10, conv_tol=1e-8,
+                         output=None)
+    raw = adcc.run_adc(matrix, finalize_relinearized=False, **kwargs)
+    with pytest.warns(UserWarning, match="not described by the fold"):
+        final = adcc.run_adc(matrix, **kwargs)
+    pole = final.matrix._lowest_eliminated_d0
+    above = raw.excitation_energy >= pole
+    assert np.count_nonzero(above) == 2
+    assert final.excitation_energy[above] == pytest.approx(
+        raw.excitation_energy[above])
+    assert final.excitation_energy[~above] == pytest.approx(
+        exact.excitation_energy[~above], abs=1e-3)
+
+
+@pytest.mark.parametrize("guess_energies", [0.1, 0.3, 1.5])
+def test_newton_bracketed_by_lowest_pole(guess_energies):
+    matrix = adc2_matrix("h2o_sto3g")
+    state = adcc.run_adc(matrix, n_singlets=1, conv_tol=1e-8, relin=True,
+                         guess_energies=guess_energies, explicit_width=0.0,
+                         finalize_relinearized=False, output=None)
+    rel = state.matrix
+    x_p = rel._active_masked(state.excitation_vector[0])
+    b = rel._coupling_into_eliminated(x_p)
+    omega = state.excitation_energy[0]
+    root, _, _ = rel._self_consistent_energy(x_p, b, omega, tol=1e-12)
+    assert np.isfinite(root)
+
+    # A (fictitious) pole just above the root and omega must not change the
+    # root, even if a Newton step overshoots it (here for omega < root).
+    rel._lowest_eliminated_d0 = max(root, omega) + 5e-6
+    root_bracketed, _, _ = rel._self_consistent_energy(x_p, b, omega,
+                                                       tol=1e-12)
+    assert root_bracketed == pytest.approx(root, abs=1e-10)
+
+
 @pytest.mark.parametrize("method", ["adc2x", "adc3"])
 def test_non_trivial_complementary_block_not_implemented(method):
     refstate = testdata_cache.refstate("h2o_sto3g", case="gen")

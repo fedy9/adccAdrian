@@ -35,6 +35,7 @@ from .AdcMatrix import (AdcMatrix, AdcMatrixlike, AdcExtraTerm,
                         RelinearizedAdcMatrix)
 from .AdcMethod import AdcMethod, IsrMethod
 from .exceptions import InputError
+from .functions import evaluate
 from .ExcitedStates import ExcitedStates
 from .ReferenceState import ReferenceState as adcc_ReferenceState
 from .solver.lanczos import lanczos
@@ -111,7 +112,8 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
     guesses : list, optional
         Provide the guess vectors to be employed for the ADC run. Takes
         preference over `n_guesses` and `n_guesses_doubles`, such that these
-        parameters are ignored.
+        parameters are ignored. For a relinearized matrix, they are projected
+        onto its explicit configurations and orthonormalized.
 
     isr_order: int or str, optional
         Order of the ISR expansion used for property calculations.
@@ -145,8 +147,8 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
     relin : bool, optional
         If `True`, solve a :class:`adcc.RelinearizedAdcMatrix` built from
         the ADC matrix instead. Without `guess_energies`, `omega_guess` is
-        estimated from the diagonal energies of the first `n_states` guess
-        vectors. Default `False`. Has no effect if `data_or_matrix` already
+        estimated from the diagonal energies of the first `n_states`
+        internal guess vectors. Default `False`. Has no effect if `data_or_matrix` already
         is a `RelinearizedAdcMatrix`.
 
     finalize_relinearized : bool, optional
@@ -167,7 +169,8 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
 
     guess_energies : float or list, optional
         Only with `relin=True`: target energy or energies used as
-        `omega_guess` instead of the automatic estimate.
+        `omega_guess` instead of the automatic estimate. Required if
+        `guesses` are given.
 
     explicit_width, order1_width : float, optional
         Only with `relin=True`: forwarded to `RelinearizedAdcMatrix`.
@@ -219,6 +222,10 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
     ... state = adcc.cvs_adc3(mf, core_orbitals=1, n_singlets=3)
     """
     was_already_relin = isinstance(data_or_matrix, RelinearizedAdcMatrix)
+    if relin and not was_already_relin and guesses is not None \
+       and guess_energies is None:
+        raise InputError("With relin=True, guess_energies must be given "
+                         "together with guesses.")
     matrix = construct_adcmatrix(
         data_or_matrix, core_orbitals=core_orbitals, frozen_core=frozen_core,
         frozen_virtual=frozen_virtual, method=method, relin=relin, 
@@ -255,9 +262,7 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
         # Built with a placeholder omega_guess (see construct_adcmatrix);
         # a RelinearizedAdcMatrix passed in by the caller is left as is.
         if guess_energies is None:
-            omega_guess = estimate_omega_guess(
-                matrix, n_states, kind, guesses=guesses
-            )
+            omega_guess = estimate_omega_guess(matrix, n_states, kind)
             if output is not None:
                 print("No guess energies provided, taking the average of "
                       "internal guesses.", file=output)
@@ -270,6 +275,9 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
                   f"({100 * w['fraction']:.2f}%) {name}"
                   for name, w in occupancy.items() if name != "total"
               ), file=output)
+
+    if isinstance(matrix, RelinearizedAdcMatrix) and guesses is not None:
+        guesses = _project_guesses_to_explicit(matrix, guesses, n_states)
 
     property_method = None
     if isr_order is not None:
@@ -512,18 +520,43 @@ def diagonalise_adcmatrix(matrix, n_states, kind, eigensolver="davidson",
                            **solverargs)
 
 
-def estimate_omega_guess(matrix, n_states, kind, guesses=None):
+def estimate_omega_guess(matrix, n_states, kind):
     """
-    Automatic `omega_guess` for `relin=True`: the diagonal energies of the
-    first `n_states` guess vectors, i.e. of `guesses` if given, else of
-    cheap singles-only guesses obtained as the solver itself would.
-    Internal function called from run_adc.
+    Automatic `omega_guess` for `relin=True`: the diagonal energies of
+    `n_states` cheap singles-only guesses, obtained as the solver itself
+    would. Internal function called from run_adc.
     """
-    if guesses is None:
-        guesses = obtain_guesses_by_inspection(matrix, n_states, kind,
-                                               n_guesses_doubles=0)
+    guesses = obtain_guesses_by_inspection(matrix, n_states, kind,
+                                           n_guesses_doubles=0)
     diagonal = matrix.diagonal()
-    return np.array([g.dot(diagonal * g) for g in guesses[:n_states]])
+    return np.array([g.dot(diagonal * g) for g in guesses])
+
+
+def _project_guesses_to_explicit(matrix, guesses, n_states):
+    """
+    Restrict user `guesses` to the explicit configurations of the
+    RelinearizedAdcMatrix `matrix` and orthonormalize them (Gram-Schmidt,
+    two passes). `matvec` never populates the eliminated configurations,
+    so a subspace free of them stays free of them; components there would
+    otherwise give spurious zero eigenvalues. Guesses (almost) entirely
+    in the eliminated space are dropped. Internal function called from
+    run_adc.
+    """
+    projected = []
+    for guess in guesses:
+        v = matrix._active_masked(guess)
+        for _ in range(2):
+            for w in projected:
+                v = v - w.dot(v) * w
+        norm = np.sqrt(v.dot(v))
+        if norm > 1e-6 * np.sqrt(guess.dot(guess)):
+            projected.append(evaluate(v / norm))
+    if len(projected) < n_states:
+        raise InputError(f"Only {len(projected)} of the guesses remain "
+                         f"linearly independent after projection onto the "
+                         f"explicit configurations of the relinearized "
+                         f"matrix, but {n_states} states are requested.")
+    return projected
 
 
 def _finalize_relinearized_states(matrix, diagres, finalize=True,
@@ -533,7 +566,8 @@ def _finalize_relinearized_states(matrix, diagres, finalize=True,
     each eigenpair in `diagres` in-place by its self-consistent energy and
     the full-space vector unfolded at it (see
     `RelinearizedAdcMatrix.finalize`), printing the Newton iterations of
-    each state. Internal function called from run_adc.
+    each state, and sort the states by their final energies. Internal
+    function called from run_adc.
     """
     if not isinstance(matrix, RelinearizedAdcMatrix) or not finalize:
         return
@@ -550,8 +584,20 @@ def _finalize_relinearized_states(matrix, diagres, finalize=True,
         energy, v, _ = matrix.finalize(ampl, omega, output=output)
         vectors.append(v)
         energies.append(energy)
-    diagres.eigenvectors = vectors
-    diagres.eigenvalues = np.array(energies)
+
+    # The corrections differ per state, so close-lying states can swap.
+    order = np.argsort(energies, kind="stable")
+    if output is not None and np.any(order != np.arange(len(order))):
+        print("  State order changed by the finalization; states are "
+              "sorted by their final energies.", file=output)
+    diagres.eigenvectors = [vectors[i] for i in order]
+    diagres.eigenvalues = np.array(energies)[order]
+    for attr in ("residual_norms", "residuals_converged"):
+        values = getattr(diagres, attr, None)
+        if values is not None:
+            setattr(diagres, attr, np.asarray(values)[order])
+    if getattr(diagres, "residuals", None) is not None:
+        diagres.residuals = [diagres.residuals[i] for i in order]
 
 
 def estimate_n_guesses(matrix, n_states, singles_only=True,
