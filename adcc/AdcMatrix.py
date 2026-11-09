@@ -1339,7 +1339,7 @@ class RelinearizedAdcMatrix(AdcMatrix):
         norm2 = v_active.dot(v_active)
         x_q = self.inverter.apply(numerator, omega_fixed)
         n = x_q.dot(x_q) / norm2
-        s = x_q.dot(x_q / evaluate(omega_fixed - self.diagonal_0)) / norm2
+        s = x_q.dot(self.inverter.divide(x_q, omega_fixed)) / norm2
         a = omega - numerator.dot(x_q) / norm2
         d = omega - omega_fixed
         w = float(omega_fixed + d / (1 + n) + s * d**2 / (1 + n)**3)

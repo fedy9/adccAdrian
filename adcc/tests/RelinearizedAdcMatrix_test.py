@@ -176,6 +176,22 @@ def test_few_guesses(case, method, n_singlets):
                                                     abs=1e-4)
 
 
+def test_fold_finite_at_explicit_diagonal():
+    # omega hitting the diagonal of an explicit configuration exactly (e.g. a
+    # pure explicit doubles state) must not give 0/0 in the fold.
+    matrix = adc2_matrix("h2o_sto3g")
+    rel = RelinearizedAdcMatrix(matrix, 0.5, explicit_width=2.0)
+    active = rel._mask_active_tensor.to_ndarray() > 0.5
+    omega = float(rel.diagonal_0.pphh.to_ndarray()[active][0])
+
+    v = adcc.guess_zero(rel)
+    v.set_random()
+    x_q = rel.inverter.apply(rel._coupling_into_eliminated(v), omega)
+    assert np.all(np.isfinite(x_q.pphh.to_ndarray()))
+    assert np.all(np.isfinite(rel.inverter.divide(x_q, omega)
+                              .pphh.to_ndarray()))
+
+
 def test_extra_terms():
     matrix = adc2_matrix("h2o_sto3g")
     ones = matrix.diagonal().ones_like()

@@ -71,6 +71,15 @@ class ComplementaryBlockInverter:
         self.v_apply = v_apply
         self.windows = [(evaluate(mask), order) for mask, order in windows]
 
+        # omega - D is only used inside the windows. Outside (explicit
+        # configurations, where every numerator vanishes) it is replaced
+        # by 1, so that an omega hitting such a D exactly never gives 0/0.
+        # Precomputed as d_shifted = omega * inside + offset.
+        inside = sum(mask for mask, _ in self.windows)
+        diagonal = getattr(diagonal_0, space)
+        self._inside = evaluate(inside)
+        self._offset = evaluate((1 - inside) - inside * diagonal)
+
     def _masked(self, ampl, iwindow):
         """`space` block of `ampl` restricted to window `iwindow`, as a
         single-block AmplitudeVector."""
@@ -79,10 +88,25 @@ class ComplementaryBlockInverter:
         out = evaluate(tensor * mask)
         return AmplitudeVector(**{self.space: out})
 
+    def _shifted_diagonal(self, omega):
+        """`omega - D` inside the windows, 1 outside, as a single-block
+        AmplitudeVector."""
+        return AmplitudeVector(**{
+            self.space: evaluate(omega * self._inside + self._offset)
+        })
+
+    def divide(self, ampl, omega):
+        """`(omega - D)^{-1} ampl` inside the windows, zero outside (the
+        0th order part of `apply`, for a `space`-only AmplitudeVector)."""
+        inside = AmplitudeVector(**{
+            self.space: evaluate(getattr(ampl, self.space) * self._inside)
+        })
+        return evaluate(inside / self._shifted_diagonal(omega))
+
     def apply(self, numerator, omega):
         """Approximate `(omega - A_QQ)^{-1} numerator` for a `space`-only
         AmplitudeVector `numerator`."""
-        d_shifted = evaluate(omega - self.diagonal_0)
+        d_shifted = self._shifted_diagonal(omega)
 
         tensor = getattr(numerator, self.space)
         res = AmplitudeVector(**{self.space: tensor.zeros_like()})
