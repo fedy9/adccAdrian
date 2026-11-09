@@ -26,54 +26,34 @@ from .AmplitudeVector import AmplitudeVector
 
 class ComplementaryBlockInverter:
     """
-    Approximate application of (omega - A_QQ)^{-1} to a vector living in a
-    single excitation space (e.g. "pphh"), where the self-coupling A_QQ of
-    that space is split as A_QQ = D + V. D is the diagonal, 0th order
-    (bare orbital energy) part of the block -- diagonal and spin-blind by
-    construction, so splitting it off this way keeps the resulting
-    approximation spin-pure. V is everything else (see
-    adc_pp.matrix.block_pphh_pphh_1_v for the concrete example).
+    Approximate application of `(omega - A_QQ)^{-1}` to a vector of a
+    single excitation space (e.g. "pphh"), with `A_QQ = D + V` split into
+    the spin-blind 0th order diagonal `D` and the remainder `V`. The space
+    is split into disjoint windows, each treated by a truncated Neumann
+    series of its own order,
 
-    The space is split into an arbitrary number of disjoint index windows
-    (a boolean mask each), each treated via a truncated Neumann series in
-    V of its own order:
+        A^{-1} v ~= sum_{k=0}^{order} (D_shifted^{-1} V)^k D_shifted^{-1} v,
 
-        A^{-1} v ~= sum_{k=0}^{order} (D_shifted^{-1} V)^k D_shifted^{-1} v
-
-    with D_shifted = omega - D. `order=0` reduces to a plain divide by
-    D_shifted for that window. There is never any coupling introduced
-    between different windows, even when several are treated
-    approximately: V's output is re-masked back onto the originating
-    window after every application.
+    with `D_shifted = omega - D` (order 0: a plain division). Windows
+    never couple to each other: the output of `V` is masked back onto the
+    originating window.
 
     Parameters
     ----------
     space : str
-        Name of the excitation space this inverter acts on (e.g. "pphh").
+        Name of the excitation space (e.g. "pphh").
     diagonal_0 : AmplitudeVector
-        The 0th order (bare) diagonal of the space_space block, as
-        returned by e.g. adc_pp.matrix.diagonal_pphh_pphh_0. Only the
-        `space` block of this AmplitudeVector is used.
+        The 0th order diagonal of the space_space block; only its `space`
+        block is used.
     v_apply : callable
-        AmplitudeVector -> AmplitudeVector, the "fluctuation" part V of
-        the space_space block (i.e. the actual block used minus its own
-        0th order part). Only invoked for windows with `order > 0`.
+        AmplitudeVector -> AmplitudeVector, the remainder `V`. Only called
+        for windows with `order > 0`.
     windows : list of (Tensor, int)
-        List of (mask, order) pairs. `mask` is a native 0.0/1.0 `Tensor`
-        (same shape/symmetry as `diagonal_0`'s `space` block -- e.g. as
-        built by `_mask_from_selection` in AdcMatrix.py, NOT a genuine
-        `space` amplitude tensor: masks derived from the diagonal are
-        symmetric, not antisymmetric, under the swaps amplitudes are
-        antisymmetric under) selecting the part of the `space` tensor
-        treated at the given Neumann `order` (>= 0). The masks must be
-        pairwise disjoint (checked via their mutual dot product, which is
-        exactly the raw element overlap count for 0.0/1.0 masks); they
-        need not cover the full space (uncovered elements are left at
-        zero). Masks are never densified via `to_ndarray()` here or
-        anywhere downstream in `apply`/`_masked` -- for a window that
-        covers most of the space (the intended role of the order-0
-        window), building it as a raw NumPy array would itself be the
-        same kind of blow-up this class exists to avoid.
+        Pairwise disjoint `(mask, order)` pairs. `mask` is a 0.0/1.0
+        `Tensor` with the symmetry of the diagonal (not an amplitude
+        tensor), e.g. from `_mask_from_selection` in AdcMatrix.py. The
+        masks need not cover the whole space; uncovered elements give
+        zero.
     """
 
     def __init__(self, space, diagonal_0, v_apply, windows):
@@ -92,21 +72,16 @@ class ComplementaryBlockInverter:
         self.windows = [(evaluate(mask), order) for mask, order in windows]
 
     def _masked(self, ampl, iwindow):
-        """
-        Return a new single-block (`space`-only) AmplitudeVector holding
-        the `space` block of `ampl`, restricted to the mask of window
-        `iwindow`. Any other blocks `ampl` might carry are dropped.
-        """
+        """`space` block of `ampl` restricted to window `iwindow`, as a
+        single-block AmplitudeVector."""
         tensor = getattr(ampl, self.space)
         mask, _ = self.windows[iwindow]
         out = evaluate(tensor * mask)
         return AmplitudeVector(**{self.space: out})
 
     def apply(self, numerator, omega):
-        """
-        Compute the approximate action of (omega - A_QQ)^{-1} on `numerator`
-        (an AmplitudeVector holding only the `space` block).
-        """
+        """Approximate `(omega - A_QQ)^{-1} numerator` for a `space`-only
+        AmplitudeVector `numerator`."""
         d_shifted = evaluate(omega - self.diagonal_0)
 
         tensor = getattr(numerator, self.space)

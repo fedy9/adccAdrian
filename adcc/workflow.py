@@ -50,7 +50,7 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
             n_guesses_doubles=None, output=sys.stdout, core_orbitals=None,
             frozen_core=None, frozen_virtual=None, method=None,
             n_singlets=None, n_triplets=None, n_spin_flip=None,
-            environment=None, relin=False, finalize_relinearized=False,
+            environment=None, relin=False, finalize_relinearized=True,
             guess_energies=None, explicit_width=None, order1_width=None,
             **solverargs):
     """Run an ADC calculation.
@@ -144,61 +144,33 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
 
     relin : bool, optional
         If `True`, solve a :class:`adcc.RelinearizedAdcMatrix` built from
-        the ordinary ADC matrix instead of the ordinary matrix itself,
-        using default tier widths and an automatic `omega_guess` estimate:
-        the diagonal-based Rayleigh quotient energies of the first
-        `n_states` guess vectors -- the ones explicitly supplied via
-        `guesses`, if given, else a small, cheap (singles-only) set
-        obtained the same way the real solve's own guesses would be.
-        Default `False`. Has no effect if `data_or_matrix` already is a
-        `RelinearizedAdcMatrix` (built and passed in directly, for full
-        control over its parameters). See :class:`adcc.RelinearizedAdcMatrix`
-        for what this approximation means and when it is appropriate.
+        the ADC matrix instead. Without `guess_energies`, `omega_guess` is
+        estimated from the diagonal energies of the first `n_states` guess
+        vectors. Default `False`. Has no effect if `data_or_matrix` already
+        is a `RelinearizedAdcMatrix`.
 
-    finalize_relinearized : int, optional
+    finalize_relinearized : bool, optional
         Only relevant when solving a :class:`adcc.RelinearizedAdcMatrix`
         (via `relin=True`, or because `data_or_matrix` already was one).
-        Selects how each converged relinearized eigenpair is finalized
-        before the :class:`adcc.ExcitedStates` object is built:
 
-        - `0` (the default): do nothing -- eigenpairs are kept exactly as
-          returned by the solver (partial vectors, still missing the
-          eliminated windows' amplitudes).
-        - `1`: each eigenvector is replaced by the result of
-          :meth:`RelinearizedAdcMatrix.reconstruct_vector` -- the full,
-          renormalized eigenvector (including the eliminated windows'
-          amplitudes). Eigenvalues are left untouched.
-        - `2`: all eigenpairs are additionally replaced at once by the
-          result of :meth:`RelinearizedAdcMatrix.finalize_vectors` -- one
-          more Rayleigh-Ritz ("Davidson") step of the real, unapproximated
-          matrix in the subspace spanned by all reconstructed and
-          mutually orthogonalized eigenvectors, giving variationally
-          improved Ritz values and Ritz vectors for every requested state
-          at once. The residual norm of each finalized state (a rigorous
-          a posteriori error bound) is tightened into an iterative
-          Kato-Temple bound (see `kato_temple_bounds`); both are printed
-          to `output` and also stored as `relinearization_residual_norms`
-          and `relinearization_error_bounds` on the returned state.
+        - `True` (the default): each converged state is finalized by
+          :meth:`RelinearizedAdcMatrix.finalize`: its energy becomes the
+          self-consistent energy (Newton, no extra matrix-vector
+          products) and its vector the full-space vector unfolded at that
+          energy. The raw eigenvalue and the Newton iterations of each
+          state are printed to `output`.
+        - `False`: the raw solver eigenpairs are kept (energies at the
+          fixed fold energy, vectors without the eliminated
+          configurations).
 
         Has no effect for an ordinary (non-relinearized) matrix.
 
     guess_energies : float or list, optional
-        Only relevant together with `relin=True` (has no effect if
-        `data_or_matrix` already is a `RelinearizedAdcMatrix`, exactly
-        like `relin`). Overrides the automatic `omega_guess` estimate
-        described under `relin` with an explicitly given energy (single
-        targeted state) or list of energies (several states at once),
-        passed directly to `RelinearizedAdcMatrix.update_omega_guess`.
-        Use this if the cheap automatic estimate is not good enough for
-        your system, e.g. because better energy estimates are already
-        available from a prior, cheaper calculation.
+        Only with `relin=True`: target energy or energies used as
+        `omega_guess` instead of the automatic estimate.
 
     explicit_width, order1_width : float, optional
-        Only relevant together with `relin=True` (has no effect if
-        `data_or_matrix` already is a `RelinearizedAdcMatrix` -- pass
-        these directly to that constructor instead in that case). Tier
-        widths forwarded to `RelinearizedAdcMatrix`; see its docstring
-        for what they mean and their defaults.
+        Only with `relin=True`: forwarded to `RelinearizedAdcMatrix`.
 
     Other parameters
     ----------------
@@ -280,17 +252,24 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
         matrix += env_matrix_term
 
     if isinstance(matrix, RelinearizedAdcMatrix) and not was_already_relin:
-        # matrix was built with a throwaway placeholder omega_guess (see
-        # construct_adcmatrix) since n_states/kind/guesses were not yet
-        # available at that point -- refine it now with the real target
-        # energies. Never touch a RelinearizedAdcMatrix the caller
-        # supplied directly: it is already configured as intended.
+        # Built with a placeholder omega_guess (see construct_adcmatrix);
+        # a RelinearizedAdcMatrix passed in by the caller is left as is.
         if guess_energies is None:
             omega_guess = estimate_omega_guess(
                 matrix, n_states, kind, guesses=guesses
             )
-            print("No guess energies provided, taking the average of internal guesses.")
+            if output is not None:
+                print("No guess energies provided, taking the average of "
+                      "internal guesses.", file=output)
             matrix.update_omega_guess(omega_guess)
+    if isinstance(matrix, RelinearizedAdcMatrix) and output is not None:
+        occupancy = matrix.window_occupancy
+        print(f"RelinearizedAdcMatrix(omega_fixed={matrix.omega_fixed:.4f}, "
+              f"{matrix.complementary_space}): " + ", ".join(
+                  f"{w['count']}/{occupancy['total']} "
+                  f"({100 * w['fraction']:.2f}%) {name}"
+                  for name, w in occupancy.items() if name != "total"
+              ), file=output)
 
     property_method = None
     if isr_order is not None:
@@ -301,15 +280,12 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
         n_guesses_doubles=n_guesses_doubles, conv_tol=conv_tol, output=output,
         eigensolver=eigensolver, **solverargs)
 
-    residual_norms, error_bounds = finalize_relinearized_states(
-        matrix, diagres, finalize_relinearized, output=output)
+    _finalize_relinearized_states(matrix, diagres, finalize_relinearized,
+                                  output=output)
 
     exstates = ExcitedStates(diagres, property_method=property_method)
     exstates.kind = kind
     exstates.spin_change = spin_change
-    if residual_norms is not None:
-        exstates.relinearization_residual_norms = residual_norms
-        exstates.relinearization_error_bounds = error_bounds
 
     # add environment corrections to excited states
     exstates += env_energy_corrections
@@ -326,14 +302,9 @@ def construct_adcmatrix(data_or_matrix, core_orbitals=None, frozen_core=None,
     Use the provided data or AdcMatrix object to check consistency of the
     other passed parameters and construct the AdcMatrix object representing
     the problem to be solved. If `relin`, and the result is not already a
-    RelinearizedAdcMatrix, wrap it in one -- with a throwaway placeholder
-    `omega_guess=0.0`, since the real target energies (needing n_states/
-    kind/guesses) are not known yet at this point; run_adc refines it via
-    `update_omega_guess` once they are. `explicit_width`/`order1_width`
-    (tier widths, fixed at construction time -- unlike `omega_guess`,
-    `update_omega_guess` does not change these later) are forwarded as-is
-    to the RelinearizedAdcMatrix constructor; `None` uses its own defaults.
-    Internal function called from run_adc.
+    RelinearizedAdcMatrix, wrap it in one, with a placeholder
+    `omega_guess=0.0` that run_adc updates once the target energies are
+    known. Internal function called from run_adc.
     """
     if not isinstance(data_or_matrix, AdcMatrixlike) and method is None:
         raise InputError("method needs to be explicitly provided unless "
@@ -543,20 +514,9 @@ def diagonalise_adcmatrix(matrix, n_states, kind, eigensolver="davidson",
 
 def estimate_omega_guess(matrix, n_states, kind, guesses=None):
     """
-    Cheap automatic `omega_guess` estimate for wrapping `matrix` (an
-    ordinary AdcMatrix) into a RelinearizedAdcMatrix (relin=True in
-    run_adc): the diagonal-based Rayleigh quotient energies of the first
-    `n_states` guess vectors that will actually be used for the real
-    solve -- `guesses[:n_states]` if the user supplied their own, else a
-    freshly (and cheaply -- singles-only, no doubles guesses) obtained
-    set via the same `obtain_guesses_by_inspection` the real solve itself
-    would fall back on. Using the actual guess vectors' own energies
-    (rather than e.g. directly sorting the raw diagonal) is consistent
-    with whatever guess selection actually does -- respecting `kind`,
-    spin symmetry, etc. -- rather than risking a different ordering from
-    re-deriving one by hand. Only ever used to seed `omega_guess`; the
-    real solve still obtains its own (typically larger and possibly
-    doubles-inclusive) guess set separately as usual.
+    Automatic `omega_guess` for `relin=True`: the diagonal energies of the
+    first `n_states` guess vectors, i.e. of `guesses` if given, else of
+    cheap singles-only guesses obtained as the solver itself would.
     Internal function called from run_adc.
     """
     if guesses is None:
@@ -566,166 +526,32 @@ def estimate_omega_guess(matrix, n_states, kind, guesses=None):
     return np.array([g.dot(diagonal * g) for g in guesses[:n_states]])
 
 
-def finalize_relinearized_states(matrix, diagres, level, output=sys.stdout):
+def _finalize_relinearized_states(matrix, diagres, finalize=True,
+                                  output=sys.stdout):
     """
-    If `matrix` is a RelinearizedAdcMatrix, finalize each eigenpair in
-    `diagres` in-place according to `level` (see `finalize_relinearized`
-    in `run_adc` for what each level does):
-
-    - `0`: do nothing.
-    - `1`: replace each eigenvector by the result of
-      `matrix.reconstruct_vector` (full, renormalized vector; eigenvalues
-      untouched).
-    - `2`: replace all eigenpairs at once by the result of
-      `matrix.finalize_vectors` (one joint Rayleigh-Ritz step against the
-      real matrix), tighten the resulting residual norms into iterative
-      Kato-Temple error bounds (see `kato_temple_bounds`), and print both.
-
-    Returns `(residual_norms, error_bounds)` (level `2` only), or
-    `(None, None)` otherwise, or if `matrix` is not a
-    RelinearizedAdcMatrix. Internal function called from run_adc.
+    If `matrix` is a RelinearizedAdcMatrix and `finalize` is set, replace
+    each eigenpair in `diagres` in-place by its self-consistent energy and
+    the full-space vector unfolded at it (see
+    `RelinearizedAdcMatrix.finalize`), printing the Newton iterations of
+    each state. Internal function called from run_adc.
     """
-    if not isinstance(matrix, RelinearizedAdcMatrix) or level == 0:
-        return None, None
+    if not isinstance(matrix, RelinearizedAdcMatrix) or not finalize:
+        return
 
-    if level == 1:
-        diagres.eigenvectors = [
-            matrix.reconstruct_vector(ampl, omega)
-            for ampl, omega in zip(diagres.eigenvectors, diagres.eigenvalues)
-        ]
-        return None, None
-
-    full_vectors, ritz_values, residual_norms = matrix.finalize_vectors(
-        diagres.eigenvectors, diagres.eigenvalues
-    )
-    diagres.eigenvectors = full_vectors
-    diagres.eigenvalues = ritz_values
-    error_bounds = kato_temple_bounds(ritz_values, residual_norms)
-
+    raw_energies = np.array(diagres.eigenvalues)
     if output is not None:
-        print("Relinearized matrix: eigenpairs finalized against the real "
-             "matrix (one extra Davidson step). Residual norm and "
-             "Kato-Temple bound are both rigorous a posteriori error "
-             "bounds on the Ritz value (Kato-Temple is the tighter one):",
-             file=output)
-        for i, (resnorm, bound) in enumerate(zip(residual_norms, error_bounds)):
-            print(f"  State {i + 1:3d}   residual norm = {resnorm:.6e}"
-                 f"   Kato-Temple bound = {bound:.6e}", file=output)
-    return residual_norms, error_bounds
-
-
-def kato_temple_bounds(ritz_values, residual_norms, tol=1e-7, max_iter=1000):
-    """
-    Iterative Kato-Temple a posteriori error bounds for a set of Ritz
-    pairs of a Hermitian matrix.
-
-    For a single Ritz pair (theta, x) with residual norm rho = ||A x -
-    theta x||, the Kato-Temple theorem states that if theta's true
-    eigenvalue is separated from the rest of the spectrum by a gap g (no
-    other eigenvalue lies within g of theta), then that eigenvalue lies
-    within rho^2 / g of theta -- a rigorous bound, and, since it is
-    quadratic in the (generally already small) residual, typically much
-    tighter than rho itself.
-
-    The gap g is not known exactly, only the other states' own Ritz
-    values and (once determined) their own error bounds. This starts
-    every state off at the trivial, gap-free bound (`error_bounds[n] =
-    residual_norms[n]`, always valid for a Hermitian matrix) and then
-    self-consistently tightens every state's bound together: for state
-    `n` (states assumed sorted algebraically ascending), the gap below is
-    the distance between state `n`'s current lower interval edge
-    (`ritz_values[n] - error_bounds[n]`) and the largest upper edge among
-    states `i < n` (`ritz_values[i] + error_bounds[i]`); the gap above is
-    defined symmetrically from states `j > n`; the smaller of the two is
-    `n`'s gap for this iteration. Since every state's own bound only
-    ever shrinks the interval assumed disjoint from its neighbours in the
-    next iteration, and never grows it back, this is expected to
-    converge; iteration stops once the largest bound change between two
-    iterations drops below `tol`.
-
-    A state whose computed gap is not positive (its interval could not be
-    shown disjoint from a neighbour's) is left at its previous iteration's
-    bound -- no further, special-cased handling of that situation (e.g.
-    merging such states into a joint bound) is implemented here.
-
-    The lowest and highest state (index `0` and `n_states - 1`) are treated
-    asymmetrically, since `ritz_values`/`residual_norms` are assumed to be
-    exactly the `n_states` algebraically *smallest* eigenpairs of the
-    matrix (as `RelinearizedAdcMatrix.finalize_vectors`, and the default
-    `which="SA"` Davidson/Lanczos solve, both produce): the lowest state
-    provably has no eigenvalue below it anywhere in the full spectrum, so
-    its gap below is a rigorous infinity, not merely an absent neighbour --
-    it is refined using only the gap above, same as any other state. The
-    highest state, however, is only the `n_states`-th smallest eigenvalue
-    of a generally much larger spectrum; the next eigenvalue above it was
-    never computed and could be arbitrarily close, so there is no known
-    gap above it at all (not even a loose one) -- unlike the "not yet
-    positive" case above, this is not a gap that self-consistency could
-    ever establish. The highest state is therefore never refined and stays
-    at its trivial residual-norm bound. (Its Ritz value and bound are
-    still used, unchanged, as the neighbour reference for the next state
-    down.)
-
-    Parameters
-    ----------
-    ritz_values : array-like
-        Ritz values, sorted algebraically ascending.
-    residual_norms : array-like
-        Residual norm of each Ritz pair, same order as `ritz_values`.
-    tol : float, optional
-        Consider the iteration converged once the largest change of any
-        state's error bound between two iterations drops below this value.
-    max_iter : int, optional
-        Safety cap on the number of self-consistency iterations.
-
-    Returns
-    -------
-    numpy.ndarray
-        The Kato-Temple error bound of each state, same order as
-        `ritz_values`.
-    """
-    e = np.asarray(ritz_values, dtype=float)
-    residual_norms = np.asarray(residual_norms, dtype=float)
-    rho2 = residual_norms**2
-    n_states = len(e)
-
-    # Start from the trivial (gap-free) a posteriori bound |lambda - theta|
-    # <= rho, always valid for a Hermitian matrix regardless of any gap --
-    # this also is the correct fallback in case a state's gap never becomes
-    # positive (e.g. a single, neighbour-less state), rather than silently
-    # returning a bound of zero.
-    error_bounds = residual_norms.copy()
-    for _ in range(max_iter):
-        lower_edge = e - error_bounds
-        upper_edge = e + error_bounds
-
-        new_bounds = error_bounds.copy()
-        for n in range(n_states - 1):
-            # The lowest state (n == 0) provably has nothing below it in
-            # the full spectrum -- gap_below is a rigorous infinity, not
-            # merely "no neighbour", so it never limits the gap here.
-            gap_below = (lower_edge[n] - np.max(upper_edge[:n])
-                        if n > 0 else np.inf)
-            gap_above = np.min(lower_edge[n + 1:]) - upper_edge[n]
-            gap = min(gap_below, gap_above)
-            if np.isfinite(gap) and gap > 0:
-                new_bounds[n] = rho2[n] / gap
-            # else: gap not (yet) positive -- special handling not
-            # implemented, keep the previous iteration's bound
-        # The highest state's gap above is fundamentally unknown (the next
-        # eigenvalue up was never computed), so it is never refined --
-        # new_bounds[-1] stays at the (unchanged) previous iteration's value.
-
-        change = np.max(np.abs(new_bounds - error_bounds))
-        error_bounds = new_bounds
-        if change < tol:
-            break
-    else:
-        warnings.warn(f"kato_temple_bounds did not converge to tol={tol} "
-                      f"within max_iter={max_iter} iterations "
-                      f"(last change: {change:.3e}).")
-
-    return error_bounds
+        print(f"Relinearized states: self-consistent energies by Newton "
+              f"(omega_fixed = {matrix.omega_fixed:.10f}), vectors unfolded "
+              f"to the full space", file=output)
+    vectors, energies = [], []
+    for i, (ampl, omega) in enumerate(zip(diagres.eigenvectors, raw_energies)):
+        if output is not None:
+            print(f"  State {i + 1:3d}   lambda = {omega:.10f}", file=output)
+        energy, v, _ = matrix.finalize(ampl, omega, output=output)
+        vectors.append(v)
+        energies.append(energy)
+    diagres.eigenvectors = vectors
+    diagres.eigenvalues = np.array(energies)
 
 
 def estimate_n_guesses(matrix, n_states, singles_only=True,

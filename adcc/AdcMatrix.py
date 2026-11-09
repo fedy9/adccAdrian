@@ -21,8 +21,8 @@
 ##
 ## ---------------------------------------------------------------------
 import itertools
+import warnings
 import numpy as np
-import scipy.linalg as la
 
 import libadcc
 
@@ -30,7 +30,7 @@ from .LazyMp import LazyMp
 from .adc_pp import matrix as ppmatrix
 from .timings import Timer, timed_member_call
 from .AdcMethod import AdcMethod, Method, AdcType
-from .functions import ones_like, evaluate, lincomb
+from .functions import ones_like, evaluate
 from .Intermediates import Intermediates
 from .AmplitudeVector import AmplitudeVector
 from .ComplementaryBlockInverter import ComplementaryBlockInverter
@@ -785,21 +785,10 @@ class AdcMatrixProjected(AdcMatrix):
 
 def _select_within_cutoff_via_search(tensor, cutoff):
     """
-    Return a list of `(index_tuple, value)` pairs for every canonical
-    element of `tensor` with `|value| <= cutoff`, found via a growing
-    `Tensor.select_n_absmin` search -- `tensor` is never densified via
-    `to_ndarray()`. Cost scales with the number of canonical elements
-    actually within `cutoff`, not with `tensor.size` itself -- but
-    `Tensor.select_n_absmin` (and the `libtensor::gen_bto_select` it
-    calls into) is a plain sequential loop over the tensor's non-zero
-    symmetry blocks with no OpenMP parallelisation, unlike the
-    contraction routines that dominate the rest of an ADC(n) run, and
-    its cost per call does not scale purely linearly with the requested
-    `n` either (it re-scans blocks from scratch each call). This is a
-    fallback, used by `_select_within_cutoff` only when the faster
-    `_select_within_cutoff_via_energies` path below cannot be used (e.g.
-    CVS, where the occupied axes span more than one MO space) -- see
-    that function's docstring for why it is normally preferred.
+    Return `(index_tuple, value)` for every canonical element of `tensor`
+    with `|value| <= cutoff`, via a growing `Tensor.select_n_absmin`
+    search (no densification). Sequential and not parallelised, so only
+    the fallback of `_select_within_cutoff` (e.g. for CVS).
     """
     if cutoff <= 0 or tensor.size == 0:
         return []
@@ -814,41 +803,17 @@ def _select_within_cutoff_via_search(tensor, cutoff):
 def _select_within_cutoff_via_energies(tensor, reference_state, axis_spaces,
                                        omega_screen, cutoff):
     """
-    Fast path for `_select_within_cutoff`: exploit that a bare (0th
-    order) diagonal like `tensor` is *separable* -- a sum of 1D orbital
-    energies, e.g. `D0_ijkabc = eps_i + eps_j + eps_k - eps_a - eps_b -
-    eps_c` -- to find every canonical element with `|D0 - omega_screen|
-    <= cutoff` using plain vectorised NumPy over those small 1D energy
-    arrays, instead of `Tensor.select_n_absmin`'s unparallelised
-    per-block C++ search over the (potentially far larger) compressed
-    tensor itself.
+    Fast path for `_select_within_cutoff`: the bare diagonal is a sum of
+    orbital energies (e.g. `D0_ijab = eps_a + eps_b - eps_i - eps_j`), so
+    all canonical elements with `|D0 - omega_screen| <= cutoff` are found
+    by vectorised NumPy over the occupied and virtual energy sums
+    (`numpy.searchsorted` on the sorted virtual sums).
 
-    Returns `None` (the caller should fall back to
-    `_select_within_cutoff_via_search`) if `axis_spaces` is not a simple
-    "all occupied axes share one MO space label, all virtual axes share
-    another" split -- e.g. under CVS, where occupied axes can span both
-    a core and a valence space. In that simple (default, non-CVS) case,
-    which is what this class is normally used for:
-
-    - the occupied-axis index tuples (e.g. `(i, j, k)`) and virtual-axis
-      index tuples (e.g. `(a, b, c)`) are enumerated *with replacement*
-      (`itertools.combinations_with_replacement`, not `combinations`):
-      repeated indices (e.g. `i == j`) are still valid, distinct
-      elements of this *symmetric*-declared diagonal tensor (unlike a
-      genuine antisymmetric amplitude tensor, nothing forces them to
-      zero) -- using plain `combinations` here silently underselects,
-      which is exactly the kind of bug this needed validating against
-      `to_ndarray()` ground truth for before trusting it;
-    - only the (small) occupied-side sums are iterated in Python; for
-      each one, the matching range of (sorted, precomputed once)
-      virtual-side sums is found via a single vectorised
-      `numpy.searchsorted` call, not a Python-level or per-block search;
-    - `Tensor.is_allowed` is still checked per candidate before it is
-      returned, as a defensive check against any symmetry restriction
-      (e.g. a spin selection rule) this simple energy-sum construction
-      does not itself know about -- in testing this never actually
-      excluded anything for the plain (non-CVS) case, but it is cheap
-      insurance against silently writing to a forbidden index elsewhere.
+    Index tuples are enumerated *with* replacement, since repeated indices
+    are distinct elements of the symmetric-declared diagonal tensor.
+    `Tensor.is_allowed` is checked for every candidate. Returns `None` (use
+    `_select_within_cutoff_via_search`) unless all occupied axes share one
+    MO space and all virtual axes another (not the case e.g. for CVS).
     """
     occ_labels = [label for label in axis_spaces if label.startswith("o")]
     virt_labels = [label for label in axis_spaces if label.startswith("v")]
@@ -894,21 +859,11 @@ def _select_within_cutoff_via_energies(tensor, reference_state, axis_spaces,
 def _select_within_cutoff(template, omega_screen, cutoff,
                           reference_state=None, axis_spaces=None):
     """
-    Return a list of `(index_tuple, value)` pairs for every canonical
-    element of the *unshifted* diagonal `template` with
-    `|value - omega_screen| <= cutoff`, without ever densifying
-    `template` via `to_ndarray()`.
-
-    Uses `_select_within_cutoff_via_energies` (fast, vectorised, no
-    dependency on OpenMP/thread count) when `reference_state` and
-    `axis_spaces` are given and the simple single-occ-space/
-    single-virt-space case applies -- it takes `template` only for its
-    `is_allowed` checks, never for its values, since it recomputes
-    everything from 1D orbital energies. Otherwise falls back to
-    `_select_within_cutoff_via_search` (via `Tensor.select_n_absmin`),
-    which needs the *shifted* tensor (it searches for elements closest
-    to zero magnitude, i.e. closest to `omega_screen`), built here via
-    one native (cheap, compressed -- no densification) subtraction.
+    Return `(index_tuple, value)` for every canonical element of the
+    unshifted diagonal `template` with `|value - omega_screen| <= cutoff`,
+    without densifying `template`. Uses
+    `_select_within_cutoff_via_energies` if possible, else
+    `_select_within_cutoff_via_search` on the shifted tensor.
     """
     if cutoff <= 0 or template.size == 0:
         return []
@@ -919,36 +874,19 @@ def _select_within_cutoff(template, omega_screen, cutoff,
         if fast is not None:
             return fast
     shifted = evaluate(template - omega_screen)
-    # _select_within_cutoff_via_search returns *shifted* values (it
-    # searches the shifted tensor directly); shift back to raw D0 so
-    # both backends agree on what "value" means to the caller.
+    # shift back, so both backends return raw D0 values
     return [(idx, v + omega_screen)
            for idx, v in _select_within_cutoff_via_search(shifted, cutoff)]
 
 
 def _mask_from_selection(template, selection):
     """
-    Build a 0.0/1.0 `Tensor` with the same shape/symmetry as `template`,
-    holding 1.0 at exactly the canonical indices in `selection` (as
-    returned by `_select_within_cutoff`) and 0.0 elsewhere.
-    `Tensor.__setitem__` "alters all elements equivalent by symmetry at
-    once", so each of the (few) *distinct* canonical assignments here
-    transparently fills in every symmetry-equivalent raw element too.
-
-    `selection` may itself contain many entries that turn out to belong
-    to the same symmetry orbit -- e.g. `_select_within_cutoff_via_energies`
-    enumerates occupied/virtual index tuples combinatorially and does not
-    know about the tensor's full declared symmetry (in particular, not
-    about spin-block equivalences such as the alpha/beta degeneracy of a
-    restricted reference), unlike `Tensor.select_n_absmin`, which
-    already deduplicates by the tensor's actual symmetry group. Since
-    `Tensor.__setitem__` costs roughly 40x what `Tensor.__getitem__`
-    does (measured: ~0.66ms vs ~0.016ms per call), each candidate is
-    read first and the write is skipped once it is already set -- this
-    is always safe (a read of exactly 1.0 proves that orbit is already
-    fully covered, never a guess) and turns what would otherwise be one
-    `__setitem__` per (highly redundant) candidate into one `__setitem__`
-    per *distinct* orbit, plus one cheap `__getitem__` per candidate.
+    Build a 0.0/1.0 `Tensor` with the shape and symmetry of `template`,
+    set to 1.0 at the indices in `selection` (and, via `__setitem__`, at
+    all symmetry-equivalent elements). `selection` can contain many
+    symmetry-equivalent entries, so each is read first and only written
+    if not yet set, since `__setitem__` is far more expensive than
+    `__getitem__`.
     """
     mask = template.zeros_like()
     for idx, _ in selection:
@@ -960,115 +898,56 @@ def _mask_from_selection(template, selection):
 
 class RelinearizedAdcMatrix(AdcMatrix):
     """
-    Relinearized ("folded"/"downfolded") ADC matrix: the self-coupling of
-    one excitation space (the "complementary" space, e.g. "pphh") is
-    partitioned into exactly three tiers, by proximity to `omega_guess`:
+    Relinearized ("folded") ADC matrix: the configurations of one
+    excitation space (the "complementary" space, by default the highest
+    one, e.g. "pphh" for ADC(2)) are split by their bare diagonal `D0`:
 
-    - an "explicit" tier (closest to `omega_guess`), kept as genuine
-      explicit unknowns, coupled to the rest of the matrix via the real,
-      unapproximated complementary block;
-    - a "1st order" tier, eliminated ("folded" into the remaining spaces)
-      via one Neumann correction to the inverse of `(omega_fixed - A_QQ)`;
-    - a "0th order" tier (everything else), eliminated via a plain
-      diagonal divide (no Neumann correction).
+    - explicit: `D0 <= omega_screen + explicit_width`, kept as unknowns
+      and coupled via the real, unapproximated complementary block;
+    - eliminated: all others, folded into the remaining spaces via
+      `(omega_fixed - D)^{-1}`, with `omega_fixed = mean(omega_guess)` and
+      `omega_screen = max(omega_guess)`.
 
-    In both eliminated tiers, `A_QQ = D + V` is split into the diagonal,
-    0th order (bare orbital energy) part `D` and the remainder `V`. `D` is
-    spin-blind by construction (it cannot distinguish e.g. an "aaaa" from
-    an "abab" spin-block, since orbital energies don't depend on spin for
-    a restricted reference), so this split keeps the resulting
-    approximation spin-pure, unlike using the diagonal of the full
-    (correlated) block would.
+    The window is one-sided: configurations below the targeted states are
+    always explicit, so every eliminated `D0` lies above them and the fold
+    has no poles there. Since `omega_fixed` is fixed, the resulting
+    operator is linear and can be diagonalised with the ordinary
+    Davidson/Lanczos solvers; its eigenvalues are exact only for
+    `omega_fixed` equal to the true eigenvalue. Use `finalize` after
+    solving (as `run_adc` does by default) to get the self-consistent
+    energy of each state and its full-space eigenvector.
 
-    Tier membership is decided by `|D0 - omega_screen| <= cutoff`, where
-    `omega_screen` is `max(omega_guess)`; the explicit cutoff is
-    `explicit_width`, and the 1st-order cutoff is `explicit_width +
-    order1_width` (`order1_width` is a *span* added on top of
-    `explicit_width`, not itself an absolute cutoff -- so widening
-    `explicit_width` alone keeps the same-sized 1st-order buffer right
-    beyond it, rather than requiring `order1_width` to be kept in sync by
-    hand). `pphh`-type diagonal energies always sit above any reasonable
-    target state's energy, so both cutoffs are effectively one-sided,
-    not a symmetric window.
-
-    There is never any direct coupling between the two eliminated tiers.
-    Coupling between the explicit tier and the eliminated tiers can be
-    included or dropped via `include_coupling`.
-
-    Since this relinearization fixes `omega_fixed` (`mean(omega_guess)`)
-    once and for all, the resulting operator is linear and can be
-    diagonalised with the ordinary Davidson/Lanczos solvers. The price is
-    that the result may only be exact for `omega_fixed` equal to the true
-    eigenvalue; for other choices it is an approximation whose quality
-    improves as `omega_fixed` approaches the true eigenvalue and/or as the
-    tier widths are widened to treat more configurations explicitly/at
-    1st order. If the complementary block is 0th order to begin with
-    (true, in particular, for the default complementary space -- i.e. the
-    highest excitation class present -- of any even-level ADC(n) method,
-    e.g. ADC(2) or ADC(4)), `V` is identically zero and the elimination is
-    exact regardless of `omega_guess` or the tier widths.
-
-    Use `finalize_vectors` after solving to get a variationally better
-    (Ritz value) estimate of the eigenvalue and a rigorous a posteriori
-    residual-norm error bound, evaluated against the real, unapproximated
-    matrix -- this is the intended normal usage pattern, and the default
-    tier widths below were calibrated assuming it is used.
+    Only a 0th order complementary block (e.g. the default space of
+    ADC(2) and ADC(4)) is supported, for which `A_QQ = D` is diagonal and
+    the elimination is exact at a given energy. Code paths for higher
+    orders (an additional 1st order tier treated by a Neumann series in
+    `V = A_QQ - D`, and `include_coupling`) are kept dormant for a future
+    ADC(3) extension.
 
     Parameters
     ----------
     matrix : AdcMatrix
         The full ADC matrix to relinearize.
     omega_guess : float or Sequence[float]
-        Approximate energy/energies of the state(s) being targeted. A
-        single float for one state; a sequence when targeting several at
-        once (e.g. with `n_ep > 1`). `omega_fixed` (used in the actual
-        fold, `1/(omega_fixed - D)`) is set to the mean; the tier widths
-        are measured from the maximum instead (`omega_screen`), since a
-        configuration can be safely far from the mean while still being
-        close to resonance with whichever targeted state sits at the top
-        of the range -- no single shared `omega_fixed` can be equally
-        good for every state, but anchoring tier membership at the
-        highest one avoids under-treating configurations that matter
-        specifically for it.
+        Approximate energy/energies of the targeted state(s). The fold is
+        evaluated at their mean (`omega_fixed`), the explicit window is
+        measured from their maximum (`omega_screen`), so that it covers
+        the highest targeted state.
     explicit_width : float, optional
-        Explicit-tier cutoff in Ha, measured from `max(omega_guess)`; see
-        above. Default `1.0`.
+        Width of the explicit window in Ha above `omega_screen`. Default
+        `1.0`, a conservative choice: for ADC(2) the self-consistent
+        energy is already accurate without any explicit configurations.
     order1_width : float, optional
-        1st-order-tier cutoff, as a *span* in Ha added on top of
-        `explicit_width` (i.e. the actual cutoff is `explicit_width +
-        order1_width`), not an absolute cutoff of its own; see above.
-        Default `4.0`, i.e. `explicit_width=1.0` and `order1_width=4.0`
-        together reproduce a 1st-order cutoff of `5.0` Ha. Both defaults
-        were calibrated by joint worst-case testing across a 10-molecule
-        ADC(3)/cc-pVDZ benchmark, targeting 5 states per molecule at once
-        (not just the lowest) and 0.05 eV accuracy, using the Ritz value
-        from `finalize_vectors` (not the raw relinearized eigenvalue) as
-        the accuracy criterion, since that is the intended normal usage
-        pattern. Confirmed to hold up (worst case still comfortably under
-        that target) when re-tested at cc-pVTZ on the hardest cc-pVDZ
-        cases. The explicit tier barely engages at all under this default
-        (well under 0.1% of configurations in every tested case) --
-        essentially all of the accuracy comes from the 1st-order tier
-        together with the Ritz correction, not from any expensive
-        exact-diagonalization treatment. This is a starting point based
-        on limited testing (small molecules only), not a rigorously tuned
-        choice.
+        Dormant (higher orders only): width in Ha of the 1st order tier
+        on top of `explicit_width`. Default `4.0`.
     complementary_space : str, optional
         Excitation space to relinearize. Defaults to the highest
         excitation class present in `matrix` (`matrix.axis_blocks[-1]`).
     include_coupling : bool, optional
-        Whether the explicit tier directly couples to the eliminated
-        tiers via the real complementary block (True, default) or
-        whether this coupling is neglected (False), i.e. the explicit
-        tier only communicates with the eliminated tiers indirectly, via
-        the other excitation spaces.
+        Dormant (higher orders only): whether the explicit tier couples
+        directly to the eliminated tiers via the complementary block.
     """
 
-    # See `explicit_width`/`order1_width` above for how these were
-    # calibrated. order1_width is a *span* on top of explicit_width (see
-    # update_omega_guess), so this default reproduces the same absolute
-    # 1st-order/0th-order boundary (1.0 + 4.0 == 5.0 Ha) the original,
-    # non-relative calibration found.
     _DEFAULT_EXPLICIT_WIDTH = 1.0
     _DEFAULT_ORDER1_WIDTH = 4.0
 
@@ -1099,11 +978,6 @@ class RelinearizedAdcMatrix(AdcMatrix):
         if order1_width <= 0:
             raise ValueError("Need order1_width > 0.")
         self.explicit_width = explicit_width
-        # order1_width is a *span* added on top of explicit_width, not an
-        # absolute cutoff -- so widening explicit_width alone always keeps
-        # the same-sized 1st-order buffer right beyond it, rather than
-        # requiring order1_width to be manually kept in sync (or erroring
-        # out if it is not).
         self.order1_width = order1_width
 
         space_space = f"{complementary_space}_{complementary_space}"
@@ -1112,12 +986,7 @@ class RelinearizedAdcMatrix(AdcMatrix):
             raise ValueError(f"The {space_space} block is not part of this "
                              "ADC matrix.")
 
-        # Everything from here down (the bare 0th order diagonal and the
-        # fluctuation V) depends only on the method/complementary_space,
-        # never on omega_guess -- computed once here and reused by every
-        # later update_omega_guess() call, so a better omega_guess
-        # becoming available later (e.g. once real guess vectors exist)
-        # never needs any of this recomputed.
+        # Independent of omega_guess, so not redone by update_omega_guess
         variant = "cvs" if self.is_core_valence_separated else None
         diagonal_0_block = ppmatrix.block(
             self.ground_state, [complementary_space, complementary_space],
@@ -1126,6 +995,15 @@ class RelinearizedAdcMatrix(AdcMatrix):
         self.diagonal_0 = diagonal_0_block.diagonal
 
         self.is_trivial = (order_used == 0)
+        # The non-trivial (V != 0) code paths below and throughout this
+        # class (order-1 tier, Neumann series, include_coupling) are kept
+        # dormant for a future ADC(3) extension.
+        if not self.is_trivial:
+            raise NotImplementedError(
+                f"RelinearizedAdcMatrix is only implemented for a 0th order "
+                f"{space_space} block (e.g. the default complementary space "
+                f"of ADC(2)), not for order {order_used} ({self.method.name})."
+            )
         if self.is_trivial:
             self._v_apply = None
         elif (complementary_space == "pphh" and order_used == 1
@@ -1149,74 +1027,41 @@ class RelinearizedAdcMatrix(AdcMatrix):
     def update_omega_guess(self, omega_guess):
         """
         (Re-)derive `omega_fixed`/`omega_screen` from `omega_guess` and
-        recompute the tier partition (`mask_active`, `window_occupancy`,
-        `inverter`) accordingly. Everything else -- in particular
-        `self.blocks`, so any environment-coupling term added via `+=`
-        after construction -- is left untouched, unlike constructing a
-        new `RelinearizedAdcMatrix` from scratch would.
-
-        This is what lets construction be split into two stages: build
-        with a throwaway placeholder `omega_guess` (e.g. `0.0`) before
-        the real target energies are known -- e.g. before initial guess
-        vectors have been obtained -- then call this once they are.
+        recompute the partition (masks, `window_occupancy`, `inverter`).
+        Everything else, e.g. environment terms added to `self.blocks`
+        after construction, is kept. This allows building the matrix with
+        a placeholder `omega_guess` before the target energies are known.
         """
         omega_guesses = np.atleast_1d(np.asarray(omega_guess, dtype=float))
         self.omega_fixed = float(np.mean(omega_guesses))
         self.omega_screen = float(np.max(omega_guesses))
 
-        # Configurations are screened by proximity to omega_screen, not
-        # to the raw diagonal: a configuration is "hard" because it is
-        # close to resonance with the highest targeted state, not merely
-        # because its bare 0th order energy happens to be small in an
-        # absolute sense.
-        #
-        # This never densifies the (potentially astronomically large,
-        # e.g. ppphhh-sized) diagonal: `_select_within_cutoff` finds the
-        # qualifying elements directly (returning raw, unshifted D0
-        # values), preferring a fast vectorised NumPy computation over
-        # the small 1D orbital energies D0 separates into (see
-        # `_select_within_cutoff_via_energies`) and falling back to a
-        # `select_n_absmin`-based search only when that is not
-        # applicable (e.g. CVS).
-        #
-        # If is_trivial, only ever search up to explicit_width, never
-        # the (generally much wider) order-1 cutoff: order1_sel is
-        # always discarded again for this case (V is identically zero,
-        # so the 1st order Neumann correction is a no-op and v_apply is
-        # never needed -- there is no reason to single out an order-1
-        # tier at all), so searching that far past explicit_width just
-        # to throw the result away was pure waste -- for ADC(4), whose
-        # default complementary_space is trivial, this was previously
-        # the dominant cost of every RelinearizedAdcMatrix construction.
-        # Otherwise, one search up to the larger (order-1) cutoff covers
-        # both the explicit and order-1 tiers; they are then split apart
-        # by the smaller (explicit) cutoff.
-        #
-        # Either way, the order-0 tier -- expected to be the
-        # overwhelming bulk of the space -- is deliberately *not* found
-        # by selection at all: it falls out for free as the complement
-        # `1 - explicit - order1` (valid native Tensor subtraction here,
-        # since these mask tensors are symmetric-, not antisymmetric-,
-        # declared), so its size never limits the cost of this method.
+        # One-sided windows: every configuration with D0 <= top is
+        # selected. As D0 > 0 (aufbau reference), [0, top] is selected as
+        # the symmetric window of radius top / 2 around top / 2. Only the
+        # (small) selected tiers are searched; the eliminated 0th order
+        # tier is the complement, so the diagonal is never densified.
+        # For a 0th order block there is no 1st order tier (V = 0).
         space = self.complementary_space
         template = getattr(self.diagonal_0, space)
         axis_spaces = self.axis_spaces[space]
+        explicit_top = self.omega_screen + self.explicit_width
         if self.is_trivial:
             active_sel = _select_within_cutoff(
-                template, self.omega_screen, self.explicit_width,
+                template, explicit_top / 2, explicit_top / 2,
                 reference_state=self.reference_state, axis_spaces=axis_spaces
             )
             order1_sel = []
         else:
-            order1_cutoff = self.explicit_width + self.order1_width
+            order1_top = explicit_top + self.order1_width
             within_order1_cutoff = _select_within_cutoff(
-                template, self.omega_screen, order1_cutoff,
+                template, order1_top / 2, order1_top / 2,
                 reference_state=self.reference_state, axis_spaces=axis_spaces
             )
             active_sel = [(idx, v) for idx, v in within_order1_cutoff
-                          if abs(v - self.omega_screen) <= self.explicit_width]
+                          if v <= explicit_top]
             order1_sel = [(idx, v) for idx, v in within_order1_cutoff
-                          if abs(v - self.omega_screen) > self.explicit_width]
+                          if v > explicit_top]
 
         active_tensor = _mask_from_selection(template, active_sel)
         self._mask_active_tensor = active_tensor
@@ -1237,17 +1082,11 @@ class RelinearizedAdcMatrix(AdcMatrix):
             "total": n_total,
             "explicit": {"count": n_explicit, "fraction": n_explicit / n_total},
         }
-        descr = [f"{n_explicit}/{n_total} ({n_explicit/n_total*100:.2f}%) explicit"]
         for mask, order in elimination_windows:
             n = int(round(float(mask.dot(mask))))
             self.window_occupancy[f"order-{order}"] = {
                 "count": n, "fraction": n / n_total
             }
-            descr.append(f"{n}/{n_total} ({n/n_total*100:.2f}%) order-{order}")
-        print(f"RelinearizedAdcMatrix(omega_fixed={self.omega_fixed:.4f},"
-              f"{self.complementary_space}): ")
-        print(", ".join(descr))
-        print("="*72)
 
         self.inverter = ComplementaryBlockInverter(
             self.complementary_space, self.diagonal_0, self._v_apply,
@@ -1255,10 +1094,9 @@ class RelinearizedAdcMatrix(AdcMatrix):
         )
 
     def _active_masked(self, v):
-        """Return a copy of `v` whose `complementary_space` block is
-        restricted to the explicit (mask_active) configurations -- never
-        trust whatever the eliminated windows of an input vector happen to
-        hold, they are always recomputed fresh, never stored."""
+        """Copy of `v` with its `complementary_space` block restricted to
+        the explicit configurations (eliminated amplitudes are always
+        recomputed, never taken from an input vector)."""
         v_active = v.copy()
         space = self.complementary_space
         active_tensor = getattr(v_active, space)
@@ -1266,42 +1104,28 @@ class RelinearizedAdcMatrix(AdcMatrix):
         return v_active
 
     def _build_numerator(self, v_active):
-        """Build the "external" numerator driving the eliminated windows --
-        the coupling of the other excitation spaces into `complementary_space`
-        plus, if `include_coupling`, the active->inactive part of the real
-        complementary block -- evaluated at the already active-masked
-        `v_active`, and restricted to the non-explicit (~mask_active)
-        configurations. Also returns the `complementary_space`-coupling-only
-        `result` AmplitudeVector (everything matvec() needs beyond the
-        numerator itself: the other spaces' contributions, with `space`
-        already reduced to the explicit window's own exact self-coupling).
-        """
+        """For `matvec`: the numerator `b` driving the eliminated
+        configurations (as `_coupling_into_eliminated`) and the result of
+        all blocks on the active-masked `v_active`, with its
+        `complementary_space` block restricted to the explicit
+        configurations."""
         space = self.complementary_space
         space_space = f"{space}_{space}"
 
-        # Apply every block except the complementary space's own
-        # self-coupling. Afterwards, result's `space` block holds exactly
-        # the coupling of the *other* spaces into `space` (evaluated at
-        # the active/window-1 amplitudes) -- this is the "external" part
-        # of the numerator driving the eliminated windows.
+        # All blocks except the complementary self-coupling
         result = v_active.zeros_like()
         for name, block_fn in self.blocks.items():
             if name != space_space:
                 result += block_fn(v_active)
         external = evaluate(getattr(result, space))
 
-        # The real, unapproximated complementary block applied to the
-        # active part: its window-1 output is window-1's own (exact)
-        # self-coupling; its window-2/3 output is the direct
-        # active->inactive coupling (only used if include_coupling).
+        # Real complementary block on the explicit part: exact explicit
+        # self-coupling, plus explicit->eliminated (if include_coupling)
         self_coupling = evaluate(
             getattr(self.blocks[space_space](v_active), space)
         )
 
-        # The `space` output only ever represents window-1 (explicit)
-        # unknowns -- windows 2+3 are not independent degrees of freedom
-        # and must never appear in the returned vector, even transiently
-        # via the "external" contribution computed above.
+        # Only the explicit configurations are unknowns
         result[space] = evaluate(
             self._mask_active_tensor * (external + self_coupling)
         )
@@ -1341,23 +1165,18 @@ class RelinearizedAdcMatrix(AdcMatrix):
 
         return result
 
-    def reconstruct_vector(self, ampl, omega):
+    def finalize(self, ampl, omega, output=None):
         """
-        Reconstruct a converged relinearized eigenvector to full
-        dimensionality: the eliminated windows' amplitudes are evaluated
-        directly (via the same fold used internally by `matvec`, but
-        without contracting them back into the explicit space) at the
-        actual converged eigenvalue `omega` -- not `omega_fixed`, which
-        is no longer needed for accuracy once the true eigenvalue is
-        known -- and added into the corresponding (previously implicit)
-        entries of the vector. The result is renormalized to unit norm,
-        since adding those previously-implicit components changes the
-        vector's norm.
-
-        This method applies no correction beyond reconstruction and
-        renormalization -- neither a variationally improved Ritz value
-        nor a residual/error bound is computed here. For that, reconstruct
-        and finalize all requested states together via `finalize_vectors`.
+        Finalize a converged relinearized eigenpair `(ampl, omega)`:
+        determine its self-consistent energy (see
+        `_self_consistent_energy`) and unfold the eliminated configurations
+        at that energy (see `_unfold`), giving the full-space eigenvector.
+        For a 0th order complementary block, the returned energy is exactly
+        the Rayleigh quotient of the returned vector with the real,
+        unapproximated matrix. No matrix-vector product with the full
+        matrix is needed: besides elementwise operations on the
+        complementary space, the only cost is one apply of the blocks
+        coupling into it (see `_coupling_into_eliminated`).
 
         Parameters
         ----------
@@ -1365,159 +1184,158 @@ class RelinearizedAdcMatrix(AdcMatrix):
             A converged eigenvector of this matrix (e.g. an entry of
             `state.eigenvectors`). Only its explicit-window entries in
             `complementary_space` are used; anything outside the explicit
-            window is discarded and recomputed from scratch.
+            window is discarded and recomputed.
         omega : float
-            The converged eigenvalue belonging to `ampl`.
+            The converged (raw) eigenvalue belonging to `ampl`.
+        output : file-like, optional
+            If given, the Newton iterations are printed to it.
 
         Returns
         -------
-        AmplitudeVector
-            The full, unit-normalized eigenvector, including the
-            eliminated windows' amplitudes.
+        tuple(float, AmplitudeVector, int)
+            The self-consistent energy, the full, unit-normalized
+            eigenvector and the number of Newton steps taken.
+        """
+        x_p = self._active_masked(ampl)
+        b = self._coupling_into_eliminated(x_p)
+        energy, x_q, n_steps = self._self_consistent_energy(x_p, b, omega,
+                                                            output=output)
+        return energy, self._unfold(x_p, x_q), n_steps
+
+    def _coupling_into_eliminated(self, v_active):
+        """
+        The numerator `b = M_QP x_P` driving the eliminated configurations,
+        for the already active-masked `v_active`: only the blocks coupling
+        into `complementary_space` are applied (the complementary block
+        itself only if `include_coupling` and it is not 0th order -- a
+        0th order block is diagonal, so it never couples explicit into
+        eliminated configurations), and the result is restricted to the
+        eliminated configurations. Equal to the numerator of
+        `_build_numerator`, without everything else `matvec` needs.
         """
         space = self.complementary_space
+        b = 0
+        for name, block_fn in self.blocks.items():
+            out_space, in_space = name.split("_")
+            if out_space != space:
+                continue
+            if in_space == space and (self.is_trivial
+                                      or not self.include_coupling):
+                continue
+            b = b + getattr(block_fn(v_active), space)
+        return AmplitudeVector(**{
+            space: evaluate(self._mask_inactive_tensor * b)
+        })
 
-        v_active = self._active_masked(ampl)
-        numerator, _ = self._build_numerator(v_active)
-        v_compl = self.inverter.apply(numerator, omega)
-
-        # Native Tensor addition here, never to_ndarray()/set_from_ndarray:
-        # `space` can be astronomically large (e.g. a triples space), and
-        # both operands already live in the same (anti)symmetric-declared
-        # tensor format, so there is nothing a dense round-trip would buy.
-        full = v_active.copy()
-        full[space] = evaluate(getattr(full, space) + getattr(v_compl, space))
-        return full / np.sqrt(full.dot(full))
-
-    def finalize_vectors(self, ampls, omegas):
+    def _self_consistent_energy(self, v_active, numerator, omega, tol=1e-6,
+                                maxiter=50, output=None):
         """
-        Finalize a set of converged relinearized eigenvectors by one
-        additional Rayleigh-Ritz ("Davidson") step against the real,
-        unapproximated ADC matrix.
+        Self-consistent energy of the converged relinearized eigenpair
+        `(v_active, omega)`: the root of
 
-        Each vector is first reconstructed to full dimensionality (see
-        `reconstruct_vector`). Reconstruction is done independently per
-        vector and breaks the mutual orthogonality the relinearized
-        solver guaranteed, so the reconstructed vectors are re-orthogonalized
-        (Gram-Schmidt) before use. The real matrix is then projected onto
-        the small subspace spanned by these orthogonalized vectors, exactly
-        as a single Davidson macro-iteration would project it onto the
-        current subspace, and that projected (Rayleigh) matrix is
-        diagonalized. This yields new, variationally optimal Ritz values
-        and Ritz vectors for *all* requested states simultaneously --
-        strictly at least as accurate as finalizing each vector on its own
-        via its individual Rayleigh quotient, since the latter is the
-        special case of this same variational principle restricted to a
-        one-dimensional subspace per state, whereas here every state's
-        trial subspace additionally benefits from the (typically small)
-        admixture of the other states' reconstructed vectors.
+            w = a + h(w),   h(w) = <b|(w - D)^{-1}|b> / <x_P|x_P>,
 
-        The residual norm of each returned Ritz pair, evaluated against
-        the same real matrix, gives a rigorous a posteriori error bound
-        for free: since the ADC matrix is Hermitian, some true eigenvalue
-        is guaranteed to lie within `residual_norm` of the corresponding
-        Ritz value -- without ever needing a separately converged
-        reference calculation. These residual norms are also exactly the
-        starting point an iterative Kato-Temple refinement would need.
+        i.e. of `w = <x_P|M(w)|x_P> / <x_P|x_P>` for the folded effective
+        matrix `M(w)` (the self-consistency of Loewdin partitioning), with
+        the explicit vector `x_P = v_active` held fixed (no eigenvector
+        relaxation). `b` is `numerator`, and `a = omega - h(omega_fixed)`
+        is the `w`-independent part `<x_P|M_PP|x_P> / <x_P|x_P>`. For a
+        0th order complementary block, this root is exactly the Rayleigh
+        quotient of the real matrix with the vector unfolded at it.
 
-        This method deliberately stops after this single extra step and
-        applies no further correction (e.g. a preconditioned residual
-        update). If a fully converged solution of the real, unapproximated
-        matrix is needed, the right way to get it is a separate call to a
-        Davidson/Lanczos solver on that real matrix, using the returned
-        vectors as its initial guesses -- this reuses the solver's own,
-        already-validated convergence and orthogonalization logic instead
-        of duplicating a bespoke correction step here, and the excellent
-        warm start from this method should mean very few further
-        iterations are needed:
+        Solved by Newton's method, started from the second-order solution
+        around `omega_fixed`,
 
-        >>> full, ritz, resnorm = rel.finalize_vectors(ampls, omegas)
-        >>> state = jacobi_davidson(matrix, full, n_ep=len(full))  # doctest: +SKIP
+            omega_fixed + d / (1 + n) + s * d**2 / (1 + n)**3
 
-        (`matrix` being the real `AdcMatrix` that `rel` relinearizes, not
-        `rel` itself.)
+        with `d = omega - omega_fixed`, `n = <x_Q|x_Q>` and
+        `s = <x_Q|(omega_fixed - D)^{-1}|x_Q>`, `x_Q` being the eliminated
+        part at `omega_fixed` (per unit-normalized `x_P`). Each step costs
+        one divide by `w - D` and two dot products over the eliminated
+        space. Iterated until a step is below `tol` (Ha), typically 2
+        steps; as `g' >= 1`, `|w - root| <= |g(w)|`. Since every
+        eliminated `D` lies above the targeted states (one-sided windows),
+        `g(w) = w - a - h(w)` is increasing and convex below the lowest
+        eliminated `D`, so the root there is unique and Newton converges
+        without safeguards.
 
-        Parameters
-        ----------
-        ampls : list of AmplitudeVector
-            Converged eigenvectors of this matrix (e.g. `state.eigenvectors`).
-            Only their explicit-window entries in `complementary_space` are
-            used; anything outside the explicit window is discarded and
-            recomputed from scratch.
-        omegas : array-like
-            The converged eigenvalues belonging to `ampls`, in the same order.
+        If `output` is given, the starting value and every Newton step are
+        printed to it, each with its change from the previous value (the
+        starting value's from `omega`).
 
         Returns
         -------
-        tuple(list, numpy.ndarray, numpy.ndarray)
-            `(full_vectors, ritz_values, residual_norms)`: the full,
-            unit-normalized and mutually orthogonal Ritz vectors; their
-            Ritz values (eigenvalues of the real matrix projected onto the
-            span of the reconstructed vectors), sorted algebraically
-            ascending; and the norm of each corresponding residual against
-            the real matrix.
+        tuple(float, AmplitudeVector, int)
+            The self-consistent energy; the eliminated part
+            `x_Q = (w - D)^{-1} b` from the last Newton step, evaluated
+            at an energy within `tol` of the returned one (so no further
+            evaluation is needed to unfold); and the number of Newton
+            steps taken.
         """
-        # Re-orthogonalize: reconstruction folds each vector's eliminated
-        # windows back independently, so the vectors -- mutually orthogonal
-        # before reconstruction -- generally are not anymore afterwards.
-        #
-        # Reconstructed and orthogonalized in the same loop, rather than
-        # building the full list of raw reconstructed vectors up front and
-        # only then looping over it to fill SS: each raw reconstructed
-        # vector is only ever needed once, to build its own SS entry, so
-        # this never holds both the complete raw list and the complete
-        # orthogonalized one (`2 * n_states` full-size vectors, each
-        # potentially as large as the complementary space, e.g. triples)
-        # at the same time -- only SS itself (`n_states` of them) plus one
-        # transient extra.
-        SS = []
-        for ampl, omega in zip(ampls, omegas):
-            v = self.reconstruct_vector(ampl, omega)
-            coefficients = np.hstack(([1], [-v.dot(w) for w in SS]))
-            v = lincomb(coefficients, [v] + SS, evaluate=True)
-            SS.append(evaluate(v / np.sqrt(v.dot(v))))
+        omega_fixed = self.omega_fixed
+        norm2 = v_active.dot(v_active)
+        x_q = self.inverter.apply(numerator, omega_fixed)
+        n = x_q.dot(x_q) / norm2
+        s = x_q.dot(x_q / evaluate(omega_fixed - self.diagonal_0)) / norm2
+        a = omega - numerator.dot(x_q) / norm2
+        d = omega - omega_fixed
+        w = float(omega_fixed + d / (1 + n) + s * d**2 / (1 + n)**3)
+        if output is not None:
+            print(f"    2nd order   omega = {w:.10f}   "
+                  f"change = {w - omega:+.4e}", file=output)
 
-        # The real, unapproximated matrix-vector product -- self.blocks
-        # holds the true blocks (RelinearizedAdcMatrix is constructed with
-        # the same block_orders as the matrix it relinearizes), so the
-        # base AdcMatrix.matvec (bypassing this class's own override)
-        # gives exactly that, with no separate matrix reference needed.
-        base_matvec = super().matvec
-        Ax = [base_matvec(v) for v in SS]
+        for n_steps in range(1, maxiter + 1):
+            x_q = self.inverter.apply(numerator, w)
+            g = w - a - numerator.dot(x_q) / norm2
+            step = g / (1 + x_q.dot(x_q) / norm2)
+            w = float(w - step)
+            if output is not None:
+                print(f"    Newton {n_steps:3d}  omega = {w:.10f}   "
+                      f"change = {-step:+.4e}", file=output)
+            if abs(step) < tol:
+                break
+        else:
+            warnings.warn(f"Self-consistent energy not converged within "
+                          f"{maxiter} Newton steps (last step {step:.2e}).")
+        self._warn_if_above_eliminated(w)
+        return w, x_q, n_steps
 
-        n = len(SS)
-        Ass = np.empty((n, n))
-        for i in range(n):
-            for j in range(i, n):
-                Ass[i, j] = Ass[j, i] = SS[i].dot(Ax[j])
+    def _warn_if_above_eliminated(self, w):
+        """Warn if `w` lies above an eliminated configuration, i.e. if a
+        pole of `(w - D)^{-1}` was crossed. Only possible above
+        `omega_screen + explicit_width`, below which everything is
+        explicit, so the (cheap) search is restricted to that range."""
+        explicit_top = self.omega_screen + self.explicit_width
+        if w <= explicit_top:
+            return
+        space = self.complementary_space
+        below = [v for _, v in _select_within_cutoff(
+            getattr(self.diagonal_0, space), (explicit_top + w) / 2,
+            (w - explicit_top) / 2, reference_state=self.reference_state,
+            axis_spaces=self.axis_spaces[space]
+        ) if v > explicit_top]
+        if below:
+            warnings.warn(
+                f"Self-consistent energy {w:.6f} lies above {len(below)} "
+                f"eliminated configuration(s) (lowest D = {min(below):.6f}); "
+                f"it is unreliable. Increase explicit_width or the omega "
+                f"guesses."
+            )
 
-        ritz_values, rvecs = la.eigh(Ass)
-        full_vectors = [lincomb(v, SS, evaluate=True) for v in np.transpose(rvecs)]
-        del SS  # superseded by full_vectors; no longer needed
-        Ax_ritz = [lincomb(v, Ax, evaluate=True) for v in np.transpose(rvecs)]
-        del Ax  # superseded by Ax_ritz; no longer needed
-        residual_norms = np.array([
-            np.sqrt((ax - rval * full).dot(ax - rval * full))
-            for ax, rval, full in zip(Ax_ritz, ritz_values, full_vectors)
-        ])
-
-        return full_vectors, ritz_values, residual_norms
+    def _unfold(self, v_active, x_q):
+        """Full, unit-normalized eigenvector: the explicit part `v_active`
+        with the eliminated configurations' amplitudes `x_q` (from
+        `_self_consistent_energy`) added back into `complementary_space`."""
+        space = self.complementary_space
+        # native Tensor addition, no densification
+        full = v_active.copy()
+        full[space] = evaluate(getattr(full, space) + getattr(x_q, space))
+        return full / np.sqrt(full.dot(full))
 
     def diagonal(self):
-        # The eliminated windows are never independent unknowns; report a
-        # large diagonal there so guesses/preconditioning never favour
-        # them (mirrors AdcMatrixProjected's treatment of ignored blocks).
-        #
-        # Built natively via the already-cached mask tensors from
-        # update_omega_guess, rather than to_ndarray()/np.where/
-        # set_from_ndarray: `tensor` here (the real diagonal, at the
-        # matrix's actual order) is -- like self.diagonal_0 -- a genuine
-        # scalar-per-configuration diagonal, hence symmetric (not
-        # antisymmetric) under the same index swaps amplitudes are
-        # antisymmetric under, exactly like _mask_active_tensor/
-        # _mask_inactive_tensor -- so this combination stays entirely
-        # within the "symmetric diagonal" family and needs no
-        # densification at all.
+        # Eliminated configurations are no unknowns: a large diagonal
+        # keeps guesses and preconditioning away from them. Built from the
+        # mask tensors, without densification.
         out = super().diagonal()
         space = self.complementary_space
         tensor = getattr(out, space)
