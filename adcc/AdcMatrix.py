@@ -932,7 +932,8 @@ class RelinearizedAdcMatrix(AdcMatrix):
     Parameters
     ----------
     matrix : AdcMatrix
-        The full ADC matrix to relinearize.
+        The full ADC matrix to relinearize: a plain `AdcMatrix` without
+        extra terms (add those to the relinearized matrix via `+=`).
     omega_guess : float or Sequence[float]
         Approximate energy/energies of the targeted state(s). The fold is
         evaluated at their mean (`omega_fixed`), the explicit window is
@@ -959,6 +960,14 @@ class RelinearizedAdcMatrix(AdcMatrix):
     def __init__(self, matrix, omega_guess, explicit_width=None,
                 order1_width=None, complementary_space=None,
                 include_coupling=True):
+        # The blocks are rebuilt from the method, which would silently drop
+        # anything else the input matrix carries.
+        if type(matrix) is not AdcMatrix or matrix.extra_terms:
+            raise NotImplementedError(
+                "RelinearizedAdcMatrix can only be built from a plain "
+                "AdcMatrix without extra terms. Add extra terms to the "
+                "RelinearizedAdcMatrix afterwards via +=."
+            )
         super().__init__(matrix.method, matrix.ground_state,
                          block_orders=matrix.block_orders,
                          intermediates=matrix.intermediates)
@@ -1167,6 +1176,14 @@ class RelinearizedAdcMatrix(AdcMatrix):
         numerator = AmplitudeVector(**{space: numerator_tensor})
 
         return numerator, result
+
+    def __add__(self, other):
+        # AdcMatrix.__add__ would return a plain AdcMatrix, silently
+        # dropping the relinearization.
+        if not isinstance(other, AdcExtraTerm):
+            return NotImplemented
+        raise NotImplementedError("Adding to a RelinearizedAdcMatrix is only "
+                                  "supported in place, via +=.")
 
     def matvec(self, v):
         space = self.complementary_space

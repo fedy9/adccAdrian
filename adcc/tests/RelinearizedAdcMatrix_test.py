@@ -24,7 +24,8 @@ import numpy as np
 import pytest
 
 import adcc
-from adcc.AdcMatrix import AdcMatrix, RelinearizedAdcMatrix
+from adcc.AdcMatrix import AdcExtraTerm, AdcMatrix, RelinearizedAdcMatrix
+from adcc.adc_pp.matrix import AdcBlock
 
 from .testdata_cache import testdata_cache
 
@@ -155,6 +156,33 @@ def test_newton_bracketed_by_lowest_pole(guess_energies):
     root_bracketed, _, _ = rel._self_consistent_energy(x_p, b, omega,
                                                        tol=1e-12)
     assert root_bracketed == pytest.approx(root, abs=1e-10)
+
+
+def test_extra_terms():
+    matrix = adc2_matrix("h2o_sto3g")
+    ones = matrix.diagonal().ones_like()
+
+    def shift_ph(hf, mp, intermediates):
+        return AdcBlock(lambda v: adcc.AmplitudeVector(ph=0.1 * v.ph),
+                        adcc.AmplitudeVector(ph=0.1 * ones.ph))
+    term = AdcExtraTerm(matrix, {"ph_ph": shift_ph})
+
+    # Terms on the input matrix would be dropped by the rebuild.
+    with pytest.raises(NotImplementedError):
+        RelinearizedAdcMatrix(matrix + term, 0.5)
+    rel = RelinearizedAdcMatrix(matrix, 0.5)
+    with pytest.raises(NotImplementedError):
+        rel + term
+    with pytest.raises(NotImplementedError):
+        term + rel
+
+    # In place (as run_adc adds environment terms) the term is applied.
+    exact = adcc.run_adc(matrix + term, n_singlets=2, conv_tol=1e-8,
+                         output=None)
+    rel += term
+    final = adcc.run_adc(rel, n_singlets=2, conv_tol=1e-8, output=None)
+    assert final.excitation_energy == pytest.approx(exact.excitation_energy,
+                                                    abs=1e-5)
 
 
 @pytest.mark.parametrize("method", ["adc2x", "adc3"])
