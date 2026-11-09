@@ -96,14 +96,6 @@ class ComplementaryBlockInverter:
             self.space: evaluate(float(omega) * self._inside + self._offset)
         })
 
-    def divide(self, ampl, omega):
-        """`(omega - D)^{-1} ampl` inside the windows, zero outside (the
-        0th order part of `apply`, for a `space`-only AmplitudeVector)."""
-        inside = AmplitudeVector(**{
-            self.space: evaluate(getattr(ampl, self.space) * self._inside)
-        })
-        return evaluate(inside / self._shifted_diagonal(omega))
-
     def apply(self, numerator, omega):
         """Approximate `(omega - A_QQ)^{-1} numerator` for a `space`-only
         AmplitudeVector `numerator`."""

@@ -1293,14 +1293,12 @@ class RelinearizedAdcMatrix(AdcMatrix):
         0th order complementary block, this root is exactly the Rayleigh
         quotient of the real matrix with the vector unfolded at it.
 
-        Solved by Newton's method, started from the second-order solution
-        around `omega_fixed`,
-
-            omega_fixed + d / (1 + n) + s * d**2 / (1 + n)**3
-
-        with `d = omega - omega_fixed`, `n = <x_Q|x_Q>` and
-        `s = <x_Q|(omega_fixed - D)^{-1}|x_Q>`, `x_Q` being the eliminated
-        part at `omega_fixed` (per unit-normalized `x_P`). Each step costs
+        Solved by Newton's method, started from the first-order solution
+        around `omega_fixed`, `omega_fixed + d / (1 + n)` with
+        `d = omega - omega_fixed` and `n = <x_Q|x_Q>`, `x_Q` being the
+        eliminated part at `omega_fixed` (per unit-normalized `x_P`),
+        which is needed for `a` anyway. (The second-order start costs one
+        more pass for at most one saved step.) Each step costs
         one divide by `w - D` and two dot products over the eliminated
         space. Iterated until a step is below `tol` (Ha), typically 2
         steps; as `g' >= 1`, `|w - root| <= |g(w)|`.
@@ -1340,14 +1338,12 @@ class RelinearizedAdcMatrix(AdcMatrix):
         norm2 = v_active.dot(v_active)
         x_q = self.inverter.apply(numerator, omega_fixed)
         n = x_q.dot(x_q) / norm2
-        s = x_q.dot(self.inverter.divide(x_q, omega_fixed)) / norm2
         a = omega - numerator.dot(x_q) / norm2
-        d = omega - omega_fixed
-        w = float(omega_fixed + d / (1 + n) + s * d**2 / (1 + n)**3)
+        w = float(omega_fixed + (omega - omega_fixed) / (1 + n))
         if w >= pole:
             w = 0.5 * (omega + pole)
         if output is not None:
-            print(f"    2nd order   omega = {w:.10f}   "
+            print(f"    1st order   omega = {w:.10f}   "
                   f"change = {w - omega:+.4e}", file=output)
 
         lower, upper = -np.inf, pole  # bracket of the root

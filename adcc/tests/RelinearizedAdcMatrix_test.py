@@ -188,8 +188,6 @@ def test_fold_finite_at_explicit_diagonal():
     v.set_random()
     x_q = rel.inverter.apply(rel._coupling_into_eliminated(v), omega)
     assert np.all(np.isfinite(x_q.pphh.to_ndarray()))
-    assert np.all(np.isfinite(rel.inverter.divide(x_q, omega)
-                              .pphh.to_ndarray()))
 
 
 @pytest.mark.parametrize("system,kind,n_states,n_reference", [
