@@ -989,8 +989,6 @@ class RelinearizedAdcMatrix(AdcMatrix):
             order1_width = self._DEFAULT_ORDER1_WIDTH
         if explicit_width < 0:
             raise ValueError("Need explicit_width >= 0.")
-        if order1_width <= 0:
-            raise ValueError("Need order1_width > 0.")
         self.explicit_width = explicit_width
         self.order1_width = order1_width
 
@@ -1009,6 +1007,9 @@ class RelinearizedAdcMatrix(AdcMatrix):
         self.diagonal_0 = diagonal_0_block.diagonal
 
         self.is_trivial = (order_used == 0)
+        # order1_width only matters if there is a 1st order tier (V != 0)
+        if not self.is_trivial and order1_width <= 0:
+            raise ValueError("Need order1_width > 0.")
         # The non-trivial (V != 0) code paths below and throughout this
         # class (order-1 tier, Neumann series, include_coupling) are kept
         # dormant for a future ADC(3) extension.

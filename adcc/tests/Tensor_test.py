@@ -44,6 +44,19 @@ class TestTensor:
         assert res.needs_evaluation
         assert_allclose(res.to_ndarray(), ref, rtol=1e-10, atol=1e-14)
 
+    @pytest.mark.parametrize("number", [0.0, 2.0])
+    def test_scalar_minus_tensor(self, number):
+        refstate = testdata_cache.refstate("h2o_sto3g", case="gen")
+        tensor = empty_like(refstate.fock("o1v1")).set_random()
+        array = tensor.to_ndarray()
+        allowed = np.array([[tensor.is_allowed((i, j))
+                             for j in range(array.shape[1])]
+                            for i in range(array.shape[0])])
+
+        res = (number - tensor).to_ndarray()
+        assert_allclose(res[allowed], number - array[allowed], atol=1e-14)
+        assert_allclose(res, -(tensor - number).to_ndarray(), atol=1e-14)
+
     def test_nontrivial_symmetrisation(self):
         refstate = testdata_cache.refstate("cn_sto3g", case="gen")
         mtcs = [nosym_like(refstate.eri("o1o1v1v1")).set_random(),

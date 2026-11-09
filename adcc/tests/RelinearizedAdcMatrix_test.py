@@ -192,6 +192,54 @@ def test_fold_finite_at_explicit_diagonal():
                               .pphh.to_ndarray()))
 
 
+@pytest.mark.parametrize("system,kind,n_states,n_reference", [
+    ("h2o_sto3g", "triplet", 3, 3),
+    ("h2o_def2tzvp", "triplet", 3, 3),
+    # The full solver needs more states to find the lowest 4 for CN
+    ("cn_sto3g", "any", 4, 6),
+    ("cn_ccpvdz", "any", 3, 3),
+])
+def test_other_kinds(system, kind, n_states, n_reference):
+    matrix = adc2_matrix(system)
+    exact = adcc.run_adc(matrix, n_states=n_reference, kind=kind,
+                         conv_tol=1e-8, output=None)
+    final = adcc.run_adc(matrix, n_states=n_states, kind=kind, conv_tol=1e-8,
+                         relin=True, output=None)
+    assert final.excitation_energy == pytest.approx(
+        exact.excitation_energy[:n_states], abs=1e-4)
+
+
+@pytest.mark.parametrize("case", ["gen", "fc", "fv", "cvs"])
+@pytest.mark.parametrize("omega,width", [(0.5, 1.0), (0.8, 0.0), (1.0, 1.5)])
+def test_masks_match_dense_selection(case, omega, width):
+    method = "cvs-adc2" if "cvs" in case else "adc2"
+    refstate = testdata_cache.refstate("h2o_sto3g", case=case)
+    matrix = adcc.AdcMatrix(method, adcc.LazyMp(refstate))
+    rel = RelinearizedAdcMatrix(matrix, omega, explicit_width=width)
+
+    diagonal = rel.diagonal_0.pphh.to_ndarray()
+    active = rel._mask_active_tensor.to_ndarray() > 0.5
+    inactive = rel._mask_inactive_tensor.to_ndarray() > 0.5
+    np.testing.assert_array_equal(active, diagonal <= omega + width)
+    np.testing.assert_array_equal(inactive, ~active)
+    eliminated = diagonal[inactive]
+    if eliminated.size:
+        assert rel._lowest_eliminated_d0 == pytest.approx(eliminated.min())
+    else:
+        assert rel._lowest_eliminated_d0 == np.inf
+
+
+def test_ignored_parameters_warn():
+    matrix = adc2_matrix("h2o_sto3g")
+    with pytest.warns(UserWarning, match="relin is not set"):
+        adcc.run_adc(matrix, n_singlets=1, guess_energies=0.5, output=None)
+    rel = RelinearizedAdcMatrix(matrix, 0.5)
+    with pytest.warns(UserWarning, match="already a RelinearizedAdcMatrix"):
+        adcc.run_adc(rel, n_singlets=1, explicit_width=0.2, output=None)
+    # order1_width is not used (nor validated) for a 0th order block
+    RelinearizedAdcMatrix(matrix, 0.5, order1_width=0.0)
+
+
 def test_extra_terms():
     matrix = adc2_matrix("h2o_sto3g")
     ones = matrix.diagonal().ones_like()

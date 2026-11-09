@@ -165,7 +165,9 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
           fixed fold energy, vectors without the eliminated
           configurations).
 
-        Has no effect for an ordinary (non-relinearized) matrix.
+        In both cases, the residual norms of the returned states are those
+        of the solver, i.e. of the relinearized problem. Has no effect for
+        an ordinary (non-relinearized) matrix.
 
     guess_energies : float or list, optional
         Only with `relin=True`: target energy or energies used as
@@ -222,6 +224,15 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
     ... state = adcc.cvs_adc3(mf, core_orbitals=1, n_singlets=3)
     """
     was_already_relin = isinstance(data_or_matrix, RelinearizedAdcMatrix)
+    relin_parameters = [name for name, value in (
+        ("guess_energies", guess_energies), ("explicit_width", explicit_width),
+        ("order1_width", order1_width)) if value is not None]
+    if relin_parameters and was_already_relin:
+        warnings.warn(f"Ignored {', '.join(relin_parameters)} because "
+                      "data_or_matrix is already a RelinearizedAdcMatrix.")
+    elif relin_parameters and not relin:
+        warnings.warn(f"Ignored {', '.join(relin_parameters)} because "
+                      "relin is not set.")
     if relin and not was_already_relin and guesses is not None \
        and guess_energies is None:
         raise InputError("With relin=True, guess_energies must be given "
@@ -264,9 +275,14 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
         if guess_energies is None:
             omega_guess = estimate_omega_guess(matrix, n_states, kind)
             if output is not None:
-                print("No guess energies provided, taking the average of "
-                      "internal guesses.", file=output)
+                print("No guess energies provided: omega_fixed from the "
+                      "mean, explicit window from the maximum of the "
+                      "internal guess energies.", file=output)
             matrix.update_omega_guess(omega_guess)
+    if isinstance(matrix, RelinearizedAdcMatrix) and eigensolver == "lanczos":
+        warnings.warn("Lanczos is prone to break down for a relinearized "
+                      "matrix, whose effective dimension is much smaller "
+                      "than its shape; use davidson.")
     if isinstance(matrix, RelinearizedAdcMatrix) and output is not None:
         occupancy = matrix.window_occupancy
         print(f"RelinearizedAdcMatrix(omega_fixed={matrix.omega_fixed:.4f}, "
