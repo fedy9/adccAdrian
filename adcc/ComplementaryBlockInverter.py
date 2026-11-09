@@ -92,7 +92,8 @@ class ComplementaryBlockInverter:
         """`omega - D` inside the windows, 1 outside, as a single-block
         AmplitudeVector."""
         return AmplitudeVector(**{
-            self.space: evaluate(omega * self._inside + self._offset)
+            # float(): a numpy scalar on the left would take over the product
+            self.space: evaluate(float(omega) * self._inside + self._offset)
         })
 
     def divide(self, ampl, omega):

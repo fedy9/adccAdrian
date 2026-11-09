@@ -182,7 +182,7 @@ def test_fold_finite_at_explicit_diagonal():
     matrix = adc2_matrix("h2o_sto3g")
     rel = RelinearizedAdcMatrix(matrix, 0.5, explicit_width=2.0)
     active = rel._mask_active_tensor.to_ndarray() > 0.5
-    omega = float(rel.diagonal_0.pphh.to_ndarray()[active][0])
+    omega = rel.diagonal_0.pphh.to_ndarray()[active][0]  # numpy scalar
 
     v = adcc.guess_zero(rel)
     v.set_random()
