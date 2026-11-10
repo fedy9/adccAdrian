@@ -988,8 +988,8 @@ class RelinearizedAdcMatrix(AdcMatrix):
             explicit_width = self._DEFAULT_EXPLICIT_WIDTH
         if order1_width is None:
             order1_width = self._DEFAULT_ORDER1_WIDTH
-        if explicit_width < 0:
-            raise ValueError("Need explicit_width >= 0.")
+        if not 0 <= explicit_width < np.inf:
+            raise ValueError("Need a finite explicit_width >= 0.")
         self.explicit_width = explicit_width
         self.order1_width = order1_width
 
@@ -1009,8 +1009,8 @@ class RelinearizedAdcMatrix(AdcMatrix):
 
         self.is_trivial = (order_used == 0)
         # order1_width only matters if there is a 1st order tier (V != 0)
-        if not self.is_trivial and order1_width <= 0:
-            raise ValueError("Need order1_width > 0.")
+        if not self.is_trivial and not 0 < order1_width < np.inf:
+            raise ValueError("Need a finite order1_width > 0.")
         # The non-trivial (V != 0) code paths below and throughout this
         # class (order-1 tier, Neumann series, include_coupling) are kept
         # dormant for a future ADC(3) extension.
@@ -1049,6 +1049,8 @@ class RelinearizedAdcMatrix(AdcMatrix):
         a placeholder `omega_guess` before the target energies are known.
         """
         omega_guesses = np.atleast_1d(np.asarray(omega_guess, dtype=float))
+        if omega_guesses.size == 0 or not np.all(np.isfinite(omega_guesses)):
+            raise ValueError("Need at least one omega_guess, all finite.")
         self.omega_fixed = float(np.mean(omega_guesses))
         self.omega_screen = float(np.max(omega_guesses))
 

@@ -272,6 +272,16 @@ def test_extra_terms():
                                                     abs=1e-5)
 
 
+@pytest.mark.parametrize("kwargs", [
+    dict(omega_guess=[]), dict(omega_guess=[0.5, np.nan]),
+    dict(omega_guess=0.5, explicit_width=-0.1),
+    dict(omega_guess=0.5, explicit_width=np.inf),
+])
+def test_invalid_parameters(kwargs):
+    with pytest.raises(ValueError):
+        RelinearizedAdcMatrix(adc2_matrix("h2o_sto3g"), **kwargs)
+
+
 @pytest.mark.parametrize("method", ["adc2x", "adc3"])
 def test_non_trivial_complementary_block_not_implemented(method):
     refstate = testdata_cache.refstate("h2o_sto3g", case="gen")
