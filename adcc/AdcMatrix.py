@@ -1141,43 +1141,6 @@ class RelinearizedAdcMatrix(AdcMatrix):
         v_active[space] = evaluate(active_tensor * self._mask_active_tensor)
         return v_active
 
-    def _build_numerator(self, v_active):
-        """For `matvec`: the numerator `b` driving the eliminated
-        configurations (as `_coupling_into_eliminated`) and the result of
-        all blocks on the active-masked `v_active`, with its
-        `complementary_space` block restricted to the explicit
-        configurations."""
-        space = self.complementary_space
-        space_space = f"{space}_{space}"
-
-        # All blocks except the complementary self-coupling
-        result = v_active.zeros_like()
-        for name, block_fn in self.blocks.items():
-            if name != space_space:
-                result += block_fn(v_active)
-        external = evaluate(getattr(result, space))
-
-        # Real complementary block on the explicit part: exact explicit
-        # self-coupling, plus explicit->eliminated (if include_coupling)
-        self_coupling = evaluate(
-            getattr(self.blocks[space_space](v_active), space)
-        )
-
-        # Only the explicit configurations are unknowns
-        result[space] = evaluate(
-            self._mask_active_tensor * (external + self_coupling)
-        )
-
-        if self.include_coupling:
-            numerator_tensor = evaluate(
-                self._mask_inactive_tensor * (external + self_coupling)
-            )
-        else:
-            numerator_tensor = evaluate(self._mask_inactive_tensor * external)
-        numerator = AmplitudeVector(**{space: numerator_tensor})
-
-        return numerator, result
-
     def __add__(self, other):
         # AdcMatrix.__add__ would return a plain AdcMatrix, silently
         # dropping the relinearization.
@@ -1186,29 +1149,53 @@ class RelinearizedAdcMatrix(AdcMatrix):
         raise NotImplementedError("Adding to a RelinearizedAdcMatrix is only "
                                   "supported in place, via +=.")
 
+    @property
+    def _eliminated_self_coupling(self):
+        """Whether the complementary block couples explicit and eliminated
+        configurations directly (never for a diagonal 0th order block)."""
+        return self.include_coupling and not self.is_trivial
+
+    def _external_coupling(self, v_active):
+        """`complementary_space` part of the blocks coupling the other
+        excitation spaces into it, applied to `v_active`."""
+        space = self.complementary_space
+        external = 0
+        for name, block_fn in self.blocks.items():
+            out_space, in_space = name.split("_")
+            if out_space == space and in_space != space:
+                external = external + getattr(block_fn(v_active), space)
+        return evaluate(external)
+
+    @timed_member_call()
     def matvec(self, v):
         space = self.complementary_space
         space_space = f"{space}_{space}"
 
         v_active = self._active_masked(v)
-        numerator, result = self._build_numerator(v_active)
-        v_compl = self.inverter.apply(numerator, self.omega_fixed)
+        external = self._external_coupling(v_active)
+        self_coupling = evaluate(
+            getattr(self.blocks[space_space](v_active), space)
+        )
+        x_q = self._coupling_into_eliminated(v_active, external,
+                                             self_coupling)
+        x_q = self.inverter.apply(x_q, self.omega_fixed)
 
-        # Fold the eliminated part back into the other excitation spaces.
+        # The blocks into the other spaces act on the explicit and the
+        # eliminated part at once, so each is applied only once.
+        v_full = v_active.copy()
+        v_full[space] = evaluate(getattr(v_active, space)
+                                 + getattr(x_q, space))
+        result = v_active.zeros_like()
         for name, block_fn in self.blocks.items():
-            b1, b2 = name.split("_")
-            if b2 == space and name != space_space:
-                result += block_fn(v_compl)
+            if name.split("_")[0] != space:
+                result += block_fn(v_full)
 
-        if self.include_coupling:
-            fed_back = evaluate(
-                getattr(self.blocks[space_space](v_compl), space)
-            )
-            result_space = getattr(result, space)
-            result[space] = evaluate(
-                result_space + fed_back * self._mask_active_tensor
-            )
-
+        # Only the explicit configurations are unknowns
+        space_result = external + self_coupling
+        if self._eliminated_self_coupling:
+            space_result = (space_result
+                            + getattr(self.blocks[space_space](x_q), space))
+        result[space] = evaluate(self._mask_active_tensor * space_result)
         return result
 
     def finalize(self, ampl, omega, output=None):
@@ -1252,29 +1239,28 @@ class RelinearizedAdcMatrix(AdcMatrix):
             return omega, ampl, 0
         return energy, self._unfold(x_p, x_q), n_steps
 
-    def _coupling_into_eliminated(self, v_active):
+    def _coupling_into_eliminated(self, v_active, external=None,
+                                  self_coupling=None):
         """
         The numerator `b = M_QP x_P` driving the eliminated configurations,
-        for the already active-masked `v_active`: only the blocks coupling
-        into `complementary_space` are applied (the complementary block
-        itself only if `include_coupling` and it is not 0th order -- a
-        0th order block is diagonal, so it never couples explicit into
-        eliminated configurations), and the result is restricted to the
-        eliminated configurations. Equal to the numerator of
-        `_build_numerator`, without everything else `matvec` needs.
+        for the already active-masked `v_active`: the blocks coupling the
+        other excitation spaces into `complementary_space` (`external`,
+        see `_external_coupling`), plus the complementary block itself
+        (`self_coupling`) only if `_eliminated_self_coupling`, restricted
+        to the eliminated configurations. Terms not given are computed.
         """
         space = self.complementary_space
-        b = 0
-        for name, block_fn in self.blocks.items():
-            out_space, in_space = name.split("_")
-            if out_space != space:
-                continue
-            if in_space == space and (self.is_trivial
-                                      or not self.include_coupling):
-                continue
-            b = b + getattr(block_fn(v_active), space)
+        if external is None:
+            external = self._external_coupling(v_active)
+        coupling = external
+        if self._eliminated_self_coupling:
+            if self_coupling is None:
+                self_coupling = getattr(
+                    self.blocks[f"{space}_{space}"](v_active), space
+                )
+            coupling = coupling + self_coupling
         return AmplitudeVector(**{
-            space: evaluate(self._mask_inactive_tensor * b)
+            space: evaluate(self._mask_inactive_tensor * coupling)
         })
 
     def _self_consistent_energy(self, v_active, numerator, omega, tol=1e-6,
