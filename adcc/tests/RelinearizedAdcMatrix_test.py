@@ -250,20 +250,36 @@ def test_other_kinds(system, kind, n_states, n_reference):
         exact.excitation_energy[:n_states], abs=1e-4)
 
 
-@pytest.mark.parametrize("case", ["gen", "fc", "fv", "cvs"])
-@pytest.mark.parametrize("omega,width", [(0.5, 1.0), (0.8, 0.0), (1.0, 1.5)])
-def test_masks_match_dense_selection(case, omega, width):
+@pytest.mark.parametrize("system,case", [
+    ("h2o_sto3g", "gen"), ("h2o_sto3g", "fc"), ("h2o_sto3g", "fv"),
+    ("h2o_sto3g", "cvs"), ("cn_sto3g", "gen"), ("cn_sto3g", "fc-fv"),
+])
+@pytest.mark.parametrize("omega,width", [(0.5, 1.0), (0.8, 0.0), (1.0, 1.5),
+                                         ([0.3, 0.5], 0.5)])
+def test_masks_match_dense_selection(system, case, omega, width):
     method = "cvs-adc2" if "cvs" in case else "adc2"
-    refstate = testdata_cache.refstate("h2o_sto3g", case=case)
+    refstate = testdata_cache.refstate(system, case=case)
     matrix = adcc.AdcMatrix(method, adcc.LazyMp(refstate))
     rel = RelinearizedAdcMatrix(matrix, omega, explicit_width=width)
 
     diagonal = rel.diagonal_0.pphh.to_ndarray()
     active = rel._mask_active_tensor.to_ndarray() > 0.5
     inactive = rel._mask_inactive_tensor.to_ndarray() > 0.5
-    np.testing.assert_array_equal(active, diagonal <= omega + width)
+    np.testing.assert_array_equal(active,
+                                  diagonal <= rel.omega_screen + width)
     np.testing.assert_array_equal(inactive, ~active)
-    eliminated = diagonal[inactive]
+
+    # The lowest pole is the lowest eliminated configuration, excluding
+    # elements with a repeated index on two axes of the same space
+    # (i == j or a == b), which vanish by antisymmetry.
+    axis_spaces = rel.axis_spaces["pphh"]
+    index = np.indices(diagonal.shape)
+    vanishing = np.zeros(diagonal.shape, dtype=bool)
+    for k in range(4):
+        for l in range(k + 1, 4):
+            if axis_spaces[k] == axis_spaces[l]:
+                vanishing |= index[k] == index[l]
+    eliminated = diagonal[inactive & ~vanishing]
     if eliminated.size:
         assert rel._lowest_eliminated_d0 == pytest.approx(eliminated.min())
     else:
