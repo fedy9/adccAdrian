@@ -191,6 +191,21 @@ def test_newton_bracketed_by_lowest_pole(guess_energies):
     assert root_bracketed == pytest.approx(root, abs=1e-10)
 
 
+def test_raw_pair_kept_for_nan_omega():
+    rel, ampl, _, _, _ = relinearized_s1(1.5)
+    with pytest.warns(UserWarning, match="kept unchanged"):
+        energy, vector, n_steps = rel.finalize(ampl, float("nan"))
+    assert np.isnan(energy) and vector is ampl and n_steps == 0
+
+
+def test_no_eliminated_configurations():
+    # An explicit window covering every configuration leaves no pole.
+    rel = RelinearizedAdcMatrix(adc2_matrix("h2o_sto3g"), 0.5,
+                                explicit_width=100.0)
+    assert rel.window_occupancy["order-0"]["count"] == 0
+    assert rel._lowest_eliminated_d0 == np.inf
+
+
 def test_raw_pair_kept_if_iteration_ends_at_pole():
     # A (fictitious) pole between omega and the root, where b does not
     # couple: no root below it, so the iteration ends at the pole.

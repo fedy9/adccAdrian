@@ -1118,7 +1118,8 @@ class RelinearizedAdcMatrix(AdcMatrix):
         by searching windows of growing width above the explicit window,
         which contains every lower configuration."""
         occupancy = self.window_occupancy
-        if occupancy["explicit"]["count"] == occupancy["total"]:
+        if all(w["count"] == 0 for name, w in occupancy.items()
+               if name.startswith("order-")):
             return np.inf
         space = self.complementary_space
         explicit_top = self.omega_screen + self.explicit_width
@@ -1335,7 +1336,7 @@ class RelinearizedAdcMatrix(AdcMatrix):
             steps taken. `(omega, None, 0)` if the raw `omega` is kept.
         """
         pole = self._lowest_eliminated_d0
-        if omega >= pole:
+        if not omega < pole:  # also catches a NaN omega
             warnings.warn(f"Relinearized eigenvalue {omega:.6f} lies at or "
                           f"above the lowest eliminated configuration "
                           f"(D = {pole:.6f}), so the state is not described "
