@@ -172,7 +172,10 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
     guess_energies : float or list, optional
         Only with `relin=True`: target energy or energies used as
         `omega_guess` instead of the automatic estimate. Required if
-        `guesses` are given.
+        `guesses` are given. The solver selects states by their raw
+        eigenvalues at `omega_fixed`, so with guess energies far from the
+        targeted states a state can be missed; compute a few more states
+        in that case.
 
     explicit_width, order1_width : float, optional
         Only with `relin=True`: forwarded to `RelinearizedAdcMatrix`.
@@ -280,9 +283,10 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
                       "internal guess energies.", file=output)
             matrix.update_omega_guess(omega_guess)
     if isinstance(matrix, RelinearizedAdcMatrix) and eigensolver == "lanczos":
-        warnings.warn("Lanczos is prone to break down for a relinearized "
-                      "matrix, whose effective dimension is much smaller "
-                      "than its shape; use davidson.")
+        warnings.warn("The block Lanczos solver does not detect breakdown. "
+                      "For a relinearized matrix with a small explicit space "
+                      "(singles and explicit doubles) it can return "
+                      "nonsensical states; use davidson.")
     if isinstance(matrix, RelinearizedAdcMatrix) and output is not None:
         occupancy = matrix.window_occupancy
         print(f"RelinearizedAdcMatrix(omega_fixed={matrix.omega_fixed:.4f}, "

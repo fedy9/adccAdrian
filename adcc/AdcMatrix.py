@@ -1312,6 +1312,12 @@ class RelinearizedAdcMatrix(AdcMatrix):
         `omega` is kept with a warning; likewise if the iteration ends at
         the pole (a pole without coupling, `b = 0` there).
 
+        The pole is the lowest eliminated `D` overall, even if a state
+        does not couple to it (`b = 0` there, e.g. by spatial or spin
+        symmetry). The bracket is then merely conservative, but a state
+        between that pole and the lowest one it couples to is kept raw.
+        This only matters for a narrow explicit window.
+
         If `output` is given, the starting value and every Newton step are
         printed to it, each with its change from the previous value (the
         starting value's from `omega`).
