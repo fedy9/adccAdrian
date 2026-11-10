@@ -20,6 +20,8 @@
 ## along with adcc. If not, see <http://www.gnu.org/licenses/>.
 ##
 ## ---------------------------------------------------------------------
+import io
+
 import numpy as np
 import pytest
 
@@ -80,17 +82,37 @@ class TestRelinearizedAdc2:
             assert eliminated.dot(eliminated) == pytest.approx(0.0, abs=1e-24)
 
 
-@pytest.mark.parametrize("system", ["h2o_def2tzvp"])
-def test_states_sorted_after_finalize(system):
+@pytest.mark.parametrize("system,kind,n_states,guess_energies,n_reference,tol", [
+    ("cn_sto3g", "any", 4, 1.0, 6, 2e-3),
+    ("h2o_def2tzvp", "singlet", 12, 1.5, 12, 1e-3),
+])
+def test_states_sorted_after_finalize(system, kind, n_states, guess_energies,
+                                      n_reference, tol):
     # A guess energy far above the states makes their corrections differ
-    # enough to swap close-lying states before sorting.
+    # enough to swap close-lying states before sorting (the energies are
+    # correspondingly less accurate).
     matrix = adc2_matrix(system)
-    exact = adcc.run_adc(matrix, n_singlets=12, conv_tol=1e-8, output=None)
-    final = adcc.run_adc(matrix, n_singlets=12, conv_tol=1e-8, relin=True,
-                         guess_energies=1.5, output=None)
+    exact = adcc.run_adc(matrix, n_states=n_reference, kind=kind,
+                         conv_tol=1e-8, output=None)
+    output = io.StringIO()
+    final = adcc.run_adc(matrix, n_states=n_states, kind=kind, conv_tol=1e-8,
+                         relin=True, guess_energies=guess_energies,
+                         output=output)
+    assert "State order changed" in output.getvalue()
     assert np.all(np.diff(final.excitation_energy) >= 0)
-    assert final.excitation_energy == pytest.approx(exact.excitation_energy,
-                                                    abs=1e-3)
+    assert final.excitation_energy == pytest.approx(
+        exact.excitation_energy[:n_states], abs=tol)
+
+
+@pytest.mark.parametrize("case", ["gen", "fc-fv"])
+def test_spin_flip(case):
+    refstate = testdata_cache.refstate("hf_631g", case=case)
+    matrix = adcc.AdcMatrix("adc2", adcc.LazyMp(refstate))
+    exact = adcc.run_adc(matrix, n_spin_flip=4, conv_tol=1e-8, output=None)
+    final = adcc.run_adc(matrix, n_spin_flip=2, conv_tol=1e-8, relin=True,
+                         output=None)
+    assert final.excitation_energy == pytest.approx(
+        exact.excitation_energy[:2], abs=1e-4)
 
 
 def test_guesses_require_guess_energies():
@@ -137,8 +159,9 @@ def test_states_above_lowest_eliminated_configuration_kept_raw():
         exact.excitation_energy[~above], abs=1e-3)
 
 
-@pytest.mark.parametrize("guess_energies", [0.1, 0.3, 1.5])
-def test_newton_bracketed_by_lowest_pole(guess_energies):
+def relinearized_s1(guess_energies):
+    """x_P, b and raw omega of the water/STO-3G S1 without explicit
+    configurations, for a guess energy far above it (omega < root)."""
     matrix = adc2_matrix("h2o_sto3g")
     state = adcc.run_adc(matrix, n_singlets=1, conv_tol=1e-8, relin=True,
                          guess_energies=guess_energies, explicit_width=0.0,
@@ -146,16 +169,36 @@ def test_newton_bracketed_by_lowest_pole(guess_energies):
     rel = state.matrix
     x_p = rel._active_masked(state.excitation_vector[0])
     b = rel._coupling_into_eliminated(x_p)
-    omega = state.excitation_energy[0]
-    root, _, _ = rel._self_consistent_energy(x_p, b, omega, tol=1e-12)
-    assert np.isfinite(root)
+    return rel, state.excitation_vector[0], x_p, b, state.excitation_energy[0]
 
-    # A (fictitious) pole just above the root and omega must not change the
-    # root, even if a Newton step overshoots it (here for omega < root).
-    rel._lowest_eliminated_d0 = max(root, omega) + 5e-6
+
+@pytest.mark.parametrize("guess_energies", [1.0, 1.5])
+def test_newton_bracketed_by_lowest_pole(guess_energies):
+    rel, _, x_p, b, omega = relinearized_s1(guess_energies)
+    root, _, _ = rel._self_consistent_energy(x_p, b, omega, tol=1e-12)
+    assert omega < root
+
+    # A (fictitious) pole just above the root clamps the start to the left
+    # of the root, so the first Newton step overshoots the pole and must be
+    # replaced by bisection, without changing the root.
+    rel._lowest_eliminated_d0 = root + 1e-7
+    output = io.StringIO()
     root_bracketed, _, _ = rel._self_consistent_energy(x_p, b, omega,
-                                                       tol=1e-12)
+                                                       tol=1e-12,
+                                                       output=output)
+    assert "(bisection)" in output.getvalue()
     assert root_bracketed == pytest.approx(root, abs=1e-10)
+
+
+def test_raw_pair_kept_if_iteration_ends_at_pole():
+    # A (fictitious) pole between omega and the root, where b does not
+    # couple: no root below it, so the iteration ends at the pole.
+    rel, ampl, x_p, b, omega = relinearized_s1(1.5)
+    root, _, _ = rel._self_consistent_energy(x_p, b, omega, tol=1e-12)
+    rel._lowest_eliminated_d0 = 0.5 * (omega + root)
+    with pytest.warns(UserWarning, match="ends at the lowest eliminated"):
+        energy, vector, n_steps = rel.finalize(ampl, omega)
+    assert energy == omega and vector is ampl and n_steps == 0
 
 
 @pytest.mark.parametrize("case,method,n_singlets", [
