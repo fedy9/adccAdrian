@@ -1405,7 +1405,7 @@ class RelinearizedAdcMatrix(AdcMatrix):
         # native Tensor addition, no densification
         full = v_active.copy()
         full[space] = evaluate(getattr(full, space) + getattr(x_q, space))
-        return full / np.sqrt(full.dot(full))
+        return evaluate(full / np.sqrt(full.dot(full)))
 
     def diagonal(self):
         # Eliminated configurations are no unknowns: a large diagonal

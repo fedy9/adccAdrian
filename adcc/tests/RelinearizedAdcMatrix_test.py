@@ -55,6 +55,7 @@ class TestRelinearizedAdc2:
         assert np.max(raw_error) > 10 * np.max(final_error)
 
         for v, ref in zip(final.excitation_vector, exact.excitation_vector):
+            assert not any(getattr(v, b).needs_evaluation for b in v.blocks)
             assert v.dot(v) == pytest.approx(1.0)
             assert abs(v.dot(ref)) > 0.9999
             assert v.pphh.dot(v.pphh) == pytest.approx(ref.pphh.dot(ref.pphh),
