@@ -270,17 +270,9 @@ def test_masks_match_dense_selection(system, case, omega, width):
                                   diagonal <= rel.omega_screen + width)
     np.testing.assert_array_equal(inactive, ~active)
 
-    # The lowest pole is the lowest eliminated configuration, excluding
-    # elements with a repeated index on two axes of the same space
-    # (i == j or a == b), which vanish by antisymmetry.
-    axis_spaces = rel.axis_spaces["pphh"]
-    index = np.indices(diagonal.shape)
-    vanishing = np.zeros(diagonal.shape, dtype=bool)
-    for k in range(4):
-        for l in range(k + 1, 4):
-            if axis_spaces[k] == axis_spaces[l]:
-                vanishing |= index[k] == index[l]
-    eliminated = diagonal[inactive & ~vanishing]
+    # The pole is the lowest eliminated element (conservatively including
+    # those vanishing by antisymmetry, e.g. i == j).
+    eliminated = diagonal[inactive]
     if eliminated.size:
         assert rel._lowest_eliminated_d0 == pytest.approx(eliminated.min())
     else:

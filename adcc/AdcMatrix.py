@@ -801,7 +801,7 @@ def _select_within_cutoff_via_search(tensor, cutoff):
 
 
 def _select_within_cutoff_via_energies(tensor, reference_state, axis_spaces,
-                                       omega_screen, cutoff, distinct=False):
+                                       omega_screen, cutoff):
     """
     Fast path for `_select_within_cutoff`: the bare diagonal is a sum of
     orbital energies (e.g. `D0_ijab = eps_a + eps_b - eps_i - eps_j`), so
@@ -810,9 +810,7 @@ def _select_within_cutoff_via_energies(tensor, reference_state, axis_spaces,
     (`numpy.searchsorted` on the sorted virtual sums).
 
     Index tuples are enumerated *with* replacement, since repeated indices
-    are distinct elements of the symmetric-declared diagonal tensor, or
-    without if `distinct` (only elements that are actual configurations,
-    since amplitudes with a repeated index vanish by antisymmetry).
+    are distinct elements of the symmetric-declared diagonal tensor.
     `Tensor.is_allowed` is checked for every candidate. Returns `None` (use
     `_select_within_cutoff_via_search`) unless all occupied axes share one
     MO space and all virtual axes another (not the case e.g. for CVS).
@@ -830,12 +828,12 @@ def _select_within_cutoff_via_energies(tensor, reference_state, axis_spaces,
     if eps_o.size == 0 or eps_v.size == 0:
         return []
 
-    combinations = (itertools.combinations if distinct
-                    else itertools.combinations_with_replacement)
-    occ_idx = np.array(list(combinations(range(eps_o.size), r_occ)))
-    virt_idx = np.array(list(combinations(range(eps_v.size), r_virt)))
-    if occ_idx.size == 0 or virt_idx.size == 0:
-        return []
+    occ_idx = np.array(list(
+        itertools.combinations_with_replacement(range(eps_o.size), r_occ)
+    ))
+    virt_idx = np.array(list(
+        itertools.combinations_with_replacement(range(eps_v.size), r_virt)
+    ))
     occ_sums = eps_o[occ_idx].sum(axis=1)
     virt_sums = eps_v[virt_idx].sum(axis=1)
     order = np.argsort(virt_sums)
@@ -859,23 +857,19 @@ def _select_within_cutoff_via_energies(tensor, reference_state, axis_spaces,
 
 
 def _select_within_cutoff(template, omega_screen, cutoff,
-                          reference_state=None, axis_spaces=None,
-                          distinct=False):
+                          reference_state=None, axis_spaces=None):
     """
     Return `(index_tuple, value)` for every canonical element of the
     unshifted diagonal `template` with `|value - omega_screen| <= cutoff`,
     without densifying `template`. Uses
-    `_select_within_cutoff_via_energies` if possible (where `distinct`
-    skips elements with repeated indices), else
-    `_select_within_cutoff_via_search` on the shifted tensor (which
-    returns symmetry representatives and ignores `distinct`).
+    `_select_within_cutoff_via_energies` if possible, else
+    `_select_within_cutoff_via_search` on the shifted tensor.
     """
     if cutoff <= 0 or template.size == 0:
         return []
     if reference_state is not None and axis_spaces is not None:
         fast = _select_within_cutoff_via_energies(
-            template, reference_state, axis_spaces, omega_screen, cutoff,
-            distinct=distinct
+            template, reference_state, axis_spaces, omega_screen, cutoff
         )
         if fast is not None:
             return fast
@@ -1122,11 +1116,7 @@ class RelinearizedAdcMatrix(AdcMatrix):
         """Lowest bare diagonal `D0` of the eliminated configurations
         (`inf` if there are none), i.e. the lowest pole of the fold. Found
         by searching windows of growing width above the explicit window,
-        which contains every lower configuration. Elements with a repeated
-        index (e.g. `i == j`), which vanish by antisymmetry and for an
-        unrestricted reference can lie below every actual configuration,
-        are skipped where the fast selection applies; the search fallback
-        (e.g. CVS) may include them, giving a conservative pole."""
+        which contains every lower configuration."""
         occupancy = self.window_occupancy
         if occupancy["explicit"]["count"] == occupancy["total"]:
             return np.inf
@@ -1137,7 +1127,7 @@ class RelinearizedAdcMatrix(AdcMatrix):
             found = [v for _, v in _select_within_cutoff(
                 getattr(self.diagonal_0, space), explicit_top + width / 2,
                 width / 2, reference_state=self.reference_state,
-                axis_spaces=self.axis_spaces[space], distinct=True
+                axis_spaces=self.axis_spaces[space]
             ) if v > explicit_top]
             if found:
                 return min(found)
@@ -1324,9 +1314,12 @@ class RelinearizedAdcMatrix(AdcMatrix):
 
         The pole is the lowest eliminated `D` overall, even if a state
         does not couple to it (`b = 0` there, e.g. by spatial or spin
-        symmetry). The bracket is then merely conservative, but a state
-        between that pole and the lowest one it couples to is kept raw.
-        This only matters for a narrow explicit window.
+        symmetry), and including elements that vanish by antisymmetry
+        (e.g. `i == j`), which for an unrestricted reference can lie below
+        every actual configuration. The bracket is then merely
+        conservative, but a state between that pole and the lowest one it
+        couples to is kept raw. This only matters for a narrow explicit
+        window.
 
         If `output` is given, the starting value and every Newton step are
         printed to it, each with its change from the previous value (the
