@@ -510,7 +510,7 @@ def diagonalise_adcmatrix(matrix, n_states, kind, eigensolver="davidson",
 
     # Obtain or check guesses
     if guesses is None:
-        explicit_count = n_guesses is not None or n_guesses_doubles is not None
+        n_guesses_given = n_guesses is not None
         if n_guesses is None:
             # restrict to the number of available singles guesses if no doubles
             # are available
@@ -526,7 +526,7 @@ def diagonalise_adcmatrix(matrix, n_states, kind, eigensolver="davidson",
         guesses = obtain_guesses_by_inspection(matrix, n_guesses, kind,
                                                n_guesses_doubles,
                                                min_guesses=min_guesses)
-        if explicit_count and len(guesses) < n_guesses:
+        if n_guesses_given and len(guesses) < n_guesses:
             warnings.warn(f"Only {len(guesses)} guesses available in the "
                           f"explicit space of the relinearized matrix "
                           f"({n_guesses} requested); using {len(guesses)}.")
@@ -679,7 +679,8 @@ def obtain_guesses_by_inspection(matrix, n_guesses, kind, n_guesses_doubles=None
     Otherwise the number of doubles guesses is adjusted to fill up whatever
     the singles guesses cannot provide to reach n_guesses.
     If min_guesses is given, fewer than n_guesses (but at least
-    min_guesses) guesses are accepted.
+    min_guesses) guesses are accepted. For a relinearized matrix, missing
+    doubles guesses (only explicit doubles qualify) are replaced by singles.
     Internal function called from run_adc.
     """
     if n_guesses_doubles is not None and n_guesses_doubles > 0 \
@@ -708,6 +709,16 @@ def obtain_guesses_by_inspection(matrix, n_guesses, kind, n_guesses_doubles=None
         if n_guesses_doubles > 0:
             doubles_guesses = guess_function(matrix, n_guesses_doubles,
                                              block="pphh")
+        n_missing = n_guesses_doubles - len(doubles_guesses)
+        if isinstance(matrix, RelinearizedAdcMatrix) and n_missing > 0 \
+           and n_guess_singles < n_guesses:
+            warnings.warn(f"Only {len(doubles_guesses)} doubles guesses "
+                          f"available in the explicit space of the "
+                          f"relinearized matrix ({n_guesses_doubles} "
+                          f"requested); filling up with singles.")
+            singles_guesses = guess_function(
+                matrix, n_guess_singles + n_missing, block="ph"
+            )
 
     total_guesses = singles_guesses + doubles_guesses
     n_required = n_guesses if min_guesses is None else min_guesses

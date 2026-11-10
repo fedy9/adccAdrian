@@ -307,6 +307,19 @@ def test_explicit_guess_count_reduced_with_warning():
                      output=None)
 
 
+def test_missing_doubles_guesses_filled_with_singles():
+    from adcc.workflow import obtain_guesses_by_inspection
+
+    matrix = adc2_matrix("h2o_sto3g")
+    state = adcc.run_adc(matrix, n_singlets=3, conv_tol=1e-8, relin=True,
+                         output=None)
+    with pytest.warns(UserWarning, match="Only 0 doubles guesses"):
+        guesses = obtain_guesses_by_inspection(state.matrix, 6, "singlet",
+                                               n_guesses_doubles=2,
+                                               min_guesses=3)
+    assert len(guesses) == 6
+
+
 def test_extra_terms():
     matrix = adc2_matrix("h2o_sto3g")
     ones = matrix.diagonal().ones_like()
