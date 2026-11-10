@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 ## vi: tabstop=4 shiftwidth=4 softtabstop=4 expandtab
 ## ---------------------------------------------------------------------
 ##
@@ -20,8 +19,8 @@
 ## along with adcc. If not, see <http://www.gnu.org/licenses/>.
 ##
 ## ---------------------------------------------------------------------
-from .functions import evaluate
 from .AmplitudeVector import AmplitudeVector
+from .functions import evaluate
 
 
 class ComplementaryBlockInverter:
@@ -61,11 +60,13 @@ class ComplementaryBlockInverter:
             if order < 0:
                 raise ValueError("The Neumann expansion order must be >= 0.")
         for i, (mask_i, _) in enumerate(windows):
-            for mask_j, _ in windows[i + 1:]:
+            for mask_j, _ in windows[i + 1 :]:
                 overlap = float(mask_i.dot(mask_j))
                 if abs(overlap) > 1e-8:
-                    raise ValueError("The windows passed to ComplementaryBlockInverter "
-                                     "must be pairwise disjoint.")
+                    raise ValueError(
+                        "The windows passed to ComplementaryBlockInverter "
+                        "must be pairwise disjoint."
+                    )
         self.space = space
         self.diagonal_0 = diagonal_0
         self.v_apply = v_apply
@@ -91,10 +92,12 @@ class ComplementaryBlockInverter:
     def _shifted_diagonal(self, omega):
         """`omega - D` inside the windows, 1 outside, as a single-block
         AmplitudeVector."""
-        return AmplitudeVector(**{
-            # float(): a numpy scalar on the left would take over the product
-            self.space: evaluate(float(omega) * self._inside + self._offset)
-        })
+        return AmplitudeVector(
+            **{
+                # float(): a numpy scalar on the left would take over the product
+                self.space: evaluate(float(omega) * self._inside + self._offset)
+            }
+        )
 
     def apply(self, numerator, omega):
         """Approximate `(omega - A_QQ)^{-1} numerator` for a `space`-only

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 ## vi: tabstop=4 shiftwidth=4 softtabstop=4 expandtab
 ## ---------------------------------------------------------------------
 ##
@@ -22,12 +21,16 @@
 ## ---------------------------------------------------------------------
 import tempfile
 import unittest
-import h5py
-import numpy as np
 from pathlib import Path
 
-from .ReferenceState_refdata_test import compare_refstate_with_reference
-from .testdata_cache import testdata_cache
+import h5py
+import numpy as np
+import pytest
+
+from adcc.backends.DataHfProvider import DataOperatorIntegralProvider
+
+from ..ReferenceState_refdata_test import compare_refstate_with_reference
+from ..testdata_cache import testdata_cache
 
 
 class TestDataHfProvdier(unittest.TestCase):
@@ -37,10 +40,19 @@ class TestDataHfProvdier(unittest.TestCase):
         data = testdata_cache._load_hfdata(system)
         refdata = testdata_cache.hfimport(system, case=case)
 
-        bdict = dict()
-        for key in ["restricted", "conv_tol", "occupation_f", "orbcoeff_fb",
-                    "orben_f", "fock_ff", "eri_ffff", "energy_scf",
-                    "nuclear_repulsion_energy", "spin_multiplicity"]:
+        bdict = {}
+        for key in [
+            "restricted",
+            "conv_tol",
+            "occupation_f",
+            "orbcoeff_fb",
+            "orben_f",
+            "fock_ff",
+            "eri_ffff",
+            "energy_scf",
+            "nuclear_repulsion_energy",
+            "spin_multiplicity",
+        ]:
             bdict[key] = data[key]
 
         dmmp = data["multipoles"]
@@ -52,8 +64,7 @@ class TestDataHfProvdier(unittest.TestCase):
 
         # Import hfdata from dict
         compare_refstate_with_reference(
-            system=system, case=case, data=data, reference=refdata, scfres=bdict,
-            compare_eri="abs"
+            system=system, case=case, data=data, reference=refdata, scfres=bdict, compare_eri="abs"
         )
 
     def test_hdf5(self):
@@ -75,10 +86,10 @@ class TestDataHfProvdier(unittest.TestCase):
 
                 # Optional keys
                 h5f.create_dataset("energy_scf", data=data["energy_scf"])
-                h5f.create_dataset("nuclear_repulsion_energy",
-                                   data=data["nuclear_repulsion_energy"])
-                h5f.create_dataset("spin_multiplicity",
-                                   data=data["spin_multiplicity"])
+                h5f.create_dataset(
+                    "nuclear_repulsion_energy", data=data["nuclear_repulsion_energy"]
+                )
+                h5f.create_dataset("spin_multiplicity", data=data["spin_multiplicity"])
 
                 dmmp = data["multipoles"]
                 mmp = h5f.create_group("multipoles")
@@ -88,6 +99,49 @@ class TestDataHfProvdier(unittest.TestCase):
 
             # Import hfdata from hdf5 file
             compare_refstate_with_reference(
-                system=system, case=case, data=data, reference=refdata,
-                scfres=str(fn), compare_eri="abs"
+                system=system,
+                case=case,
+                data=data,
+                reference=refdata,
+                scfres=str(fn),
+                compare_eri="abs",
             )
+
+
+class TestDataOperatorIntegralProvider(unittest.TestCase):
+    def test_available(self):
+        # ensure that all integrals are listed that are available for at least 1 gauge_origin
+        assert not DataOperatorIntegralProvider({}, n_bas=1).available
+        assert not DataOperatorIntegralProvider({"something": 1}, n_bas=1).available
+        assert DataOperatorIntegralProvider(
+            {"multipoles": {"elec_1": np.array([[0, 0], [0, 0]])}}, n_bas=2
+        ).available == ("electric_dipole",)
+        # shape does not matter for available. Just that we have some data
+        assert DataOperatorIntegralProvider(
+            {"multipoles": {"elec_1": np.array([0])}}, n_bas=2
+        ).available == ("electric_dipole",)
+        assert DataOperatorIntegralProvider(
+            {"magnetic_moments": {"mag_1_mass_center": np.array([0])}}, n_bas=2
+        ).available == ("magnetic_dipole",)
+        assert DataOperatorIntegralProvider(
+            {"magnetic_moments": {"mag_1_origin": np.array([0])}}, n_bas=2
+        ).available == ("magnetic_dipole",)
+
+    def test_available_gauge_origins(self):
+        data = {
+            "magnetic_moments": {
+                "mag_1_origin": np.array([[0, 0], [0, 0]]),
+                "mag_1_mass_center": np.array([[1, 1], [1, 1]]),
+            },
+        }
+        provider = DataOperatorIntegralProvider(data, n_bas=2)
+        assert provider.available_gauge_origins("magnetic_dipole") == ("origin", "mass_center")
+        # try to load a gauge independent operator
+        data = {
+            "multipoles": {
+                "elec_1": np.array([[0, 0], [0, 0]]),
+            },
+        }
+        provider = DataOperatorIntegralProvider(data, n_bas=2)
+        with pytest.raises(ValueError):
+            provider.available_gauge_origins("electric_dipole")

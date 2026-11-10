@@ -16,9 +16,9 @@
 // You should have received a copy of the GNU General Public License
 // along with adcc. If not, see <http://www.gnu.org/licenses/>.
 //
+#include <pybind11/pybind11.h>  // Python.h must be included first, see python docs
 
 #include "../MoSpaces.hh"
-#include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
 namespace libadcc {
@@ -32,7 +32,7 @@ void export_MoSpaces(py::module& m) {
         "information about them. Python binding to :cpp:class:`libadcc::MoSpaces`.")
         .def(py::init<const HartreeFockSolution_i&, std::shared_ptr<const AdcMemory>,
                       std::vector<size_t>, std::vector<size_t>, std::vector<size_t>>(),
-             py::arg("hf"), py::arg("adcmem"), py::arg("core_orbitals"),
+             py::arg("hf"), py::arg("adcmem").none(false), py::arg("core_orbitals"),
              py::arg("frozen_core_orbitals"), py::arg("frozen_virtuals"),
              "Construct an MoSpaces object from a HartreeFockSolution_i, a pointer to\n"
              "an AdcMemory object.\n"

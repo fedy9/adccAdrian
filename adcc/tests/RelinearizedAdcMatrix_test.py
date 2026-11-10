@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 ## vi: tabstop=4 shiftwidth=4 softtabstop=4 expandtab
 ## ---------------------------------------------------------------------
 ##
@@ -26,8 +25,8 @@ import numpy as np
 import pytest
 
 import adcc
-from adcc.AdcMatrix import AdcExtraTerm, AdcMatrix, RelinearizedAdcMatrix
 from adcc.adc_pp.matrix import AdcBlock
+from adcc.AdcMatrix import AdcExtraTerm, AdcMatrix, RelinearizedAdcMatrix
 
 from .testdata_cache import testdata_cache
 
@@ -37,17 +36,20 @@ def adc2_matrix(system):
     return adcc.AdcMatrix("adc2", adcc.LazyMp(refstate))
 
 
-@pytest.mark.parametrize("system,tol", [("h2o_sto3g", 1e-6),
-                                        ("h2o_def2tzvp", 1e-4)])
+@pytest.mark.parametrize("system,tol", [("h2o_sto3g", 1e-6), ("h2o_def2tzvp", 1e-4)])
 class TestRelinearizedAdc2:
     def test_finalized_states_match_exact(self, system, tol):
         matrix = adc2_matrix(system)
-        exact = adcc.run_adc(matrix, n_singlets=3, conv_tol=1e-8,
-                             output=None)
-        raw = adcc.run_adc(matrix, n_singlets=3, conv_tol=1e-8, relin=True,
-                           finalize_relinearized=False, output=None)
-        final = adcc.run_adc(matrix, n_singlets=3, conv_tol=1e-8, relin=True,
-                             output=None)
+        exact = adcc.run_adc(matrix, n_singlets=3, conv_tol=1e-8, output=None)
+        raw = adcc.run_adc(
+            matrix,
+            n_singlets=3,
+            conv_tol=1e-8,
+            relin=True,
+            finalize_relinearized=False,
+            output=None,
+        )
+        final = adcc.run_adc(matrix, n_singlets=3, conv_tol=1e-8, relin=True, output=None)
 
         raw_error = np.abs(raw.excitation_energy - exact.excitation_energy)
         final_error = np.abs(final.excitation_energy - exact.excitation_energy)
@@ -58,16 +60,20 @@ class TestRelinearizedAdc2:
             assert not any(getattr(v, b).needs_evaluation for b in v.blocks)
             assert v.dot(v) == pytest.approx(1.0)
             assert abs(v.dot(ref)) > 0.9999
-            assert v.pphh.dot(v.pphh) == pytest.approx(ref.pphh.dot(ref.pphh),
-                                                       rel=1e-2)
+            assert v.pphh.dot(v.pphh) == pytest.approx(ref.pphh.dot(ref.pphh), rel=1e-2)
 
     def test_finalize_energy_is_rayleigh_quotient(self, system, tol):
         matrix = adc2_matrix(system)
-        state = adcc.run_adc(matrix, n_singlets=2, conv_tol=1e-8, relin=True,
-                             finalize_relinearized=False, output=None)
+        state = adcc.run_adc(
+            matrix,
+            n_singlets=2,
+            conv_tol=1e-8,
+            relin=True,
+            finalize_relinearized=False,
+            output=None,
+        )
         rel = state.matrix
-        for ampl, omega in zip(state.excitation_vector,
-                               state.excitation_energy):
+        for ampl, omega in zip(state.excitation_vector, state.excitation_energy):
             energy, v, n_steps = rel.finalize(ampl, omega)
             rayleigh = v.dot(AdcMatrix.matvec(rel, v))  # real matrix
             assert energy == pytest.approx(rayleigh, abs=1e-10)
@@ -75,34 +81,46 @@ class TestRelinearizedAdc2:
 
     def test_raw_vectors_lack_eliminated_part(self, system, tol):
         matrix = adc2_matrix(system)
-        state = adcc.run_adc(matrix, n_singlets=2, conv_tol=1e-8, relin=True,
-                             finalize_relinearized=False, output=None)
+        state = adcc.run_adc(
+            matrix,
+            n_singlets=2,
+            conv_tol=1e-8,
+            relin=True,
+            finalize_relinearized=False,
+            output=None,
+        )
         inactive = state.matrix._mask_inactive_tensor
         for v in state.excitation_vector:
             eliminated = v.pphh * inactive
             assert eliminated.dot(eliminated) == pytest.approx(0.0, abs=1e-24)
 
 
-@pytest.mark.parametrize("system,kind,n_states,guess_energies,n_reference,tol", [
-    ("cn_sto3g", "any", 4, 1.0, 6, 2e-3),
-    ("h2o_def2tzvp", "singlet", 12, 1.5, 12, 1e-3),
-])
-def test_states_sorted_after_finalize(system, kind, n_states, guess_energies,
-                                      n_reference, tol):
+@pytest.mark.parametrize(
+    "system,kind,n_states,guess_energies,n_reference,tol",
+    [
+        ("cn_sto3g", "any", 4, 1.0, 6, 2e-3),
+        ("h2o_def2tzvp", "singlet", 12, 1.5, 12, 1e-3),
+    ],
+)
+def test_states_sorted_after_finalize(system, kind, n_states, guess_energies, n_reference, tol):
     # A guess energy far above the states makes their corrections differ
     # enough to swap close-lying states before sorting (the energies are
     # correspondingly less accurate).
     matrix = adc2_matrix(system)
-    exact = adcc.run_adc(matrix, n_states=n_reference, kind=kind,
-                         conv_tol=1e-8, output=None)
+    exact = adcc.run_adc(matrix, n_states=n_reference, kind=kind, conv_tol=1e-8, output=None)
     output = io.StringIO()
-    final = adcc.run_adc(matrix, n_states=n_states, kind=kind, conv_tol=1e-8,
-                         relin=True, guess_energies=guess_energies,
-                         output=output)
+    final = adcc.run_adc(
+        matrix,
+        n_states=n_states,
+        kind=kind,
+        conv_tol=1e-8,
+        relin=True,
+        guess_energies=guess_energies,
+        output=output,
+    )
     assert "State order changed" in output.getvalue()
     assert np.all(np.diff(final.excitation_energy) >= 0)
-    assert final.excitation_energy == pytest.approx(
-        exact.excitation_energy[:n_states], abs=tol)
+    assert final.excitation_energy == pytest.approx(exact.excitation_energy[:n_states], abs=tol)
 
 
 @pytest.mark.parametrize("case", ["gen", "fc-fv"])
@@ -110,33 +128,34 @@ def test_spin_flip(case):
     refstate = testdata_cache.refstate("hf_631g", case=case)
     matrix = adcc.AdcMatrix("adc2", adcc.LazyMp(refstate))
     exact = adcc.run_adc(matrix, n_spin_flip=4, conv_tol=1e-8, output=None)
-    final = adcc.run_adc(matrix, n_spin_flip=2, conv_tol=1e-8, relin=True,
-                         output=None)
-    assert final.excitation_energy == pytest.approx(
-        exact.excitation_energy[:2], abs=1e-4)
+    final = adcc.run_adc(matrix, n_spin_flip=2, conv_tol=1e-8, relin=True, output=None)
+    assert final.excitation_energy == pytest.approx(exact.excitation_energy[:2], abs=1e-4)
 
 
 def test_guesses_require_guess_energies():
     matrix = adc2_matrix("h2o_sto3g")
     exact = adcc.run_adc(matrix, n_singlets=2, conv_tol=1e-8, output=None)
     with pytest.raises(adcc.InputError):
-        adcc.run_adc(matrix, n_singlets=2, relin=True,
-                     guesses=exact.excitation_vector, output=None)
+        adcc.run_adc(matrix, n_singlets=2, relin=True, guesses=exact.excitation_vector, output=None)
 
 
-@pytest.mark.parametrize("system,guess_energies", [("h2o_sto3g", 0.5),
-                                                   ("h2o_def2tzvp", 0.35)])
+@pytest.mark.parametrize("system,guess_energies", [("h2o_sto3g", 0.5), ("h2o_def2tzvp", 0.35)])
 def test_user_guesses_with_eliminated_components(system, guess_energies):
     # Exact ADC(2) vectors have components in the eliminated doubles; unless
     # projected away, these converge to spurious zero eigenvalues.
     matrix = adc2_matrix(system)
     exact = adcc.run_adc(matrix, n_singlets=3, conv_tol=1e-8, output=None)
     guesses = [v.copy() for v in exact.excitation_vector]
-    final = adcc.run_adc(matrix, n_singlets=3, conv_tol=1e-8, relin=True,
-                         guesses=guesses, guess_energies=guess_energies,
-                         output=None)
-    assert final.excitation_energy == pytest.approx(exact.excitation_energy,
-                                                    abs=1e-4)
+    final = adcc.run_adc(
+        matrix,
+        n_singlets=3,
+        conv_tol=1e-8,
+        relin=True,
+        guesses=guesses,
+        guess_energies=guess_energies,
+        output=None,
+    )
+    assert final.excitation_energy == pytest.approx(exact.excitation_energy, abs=1e-4)
 
 
 def test_states_above_lowest_eliminated_configuration_kept_raw():
@@ -144,29 +163,42 @@ def test_states_above_lowest_eliminated_configuration_kept_raw():
     # and 10 (just above the lowest eliminated D0) are not part of the fold;
     # its 9th and 10th eigenvalues lie far above and must be kept as they are.
     matrix = adc2_matrix("h2o_sto3g")
-    kwargs = dict(n_singlets=10, n_guesses=10, conv_tol=1e-8, relin=True,
-                  guess_energies=0.5, explicit_width=0.0, output=None)
-    exact = adcc.run_adc(matrix, n_singlets=10, n_guesses=10, conv_tol=1e-8,
-                         output=None)
+    kwargs = {
+        "n_singlets": 10,
+        "n_guesses": 10,
+        "conv_tol": 1e-8,
+        "relin": True,
+        "guess_energies": 0.5,
+        "explicit_width": 0.0,
+        "output": None,
+    }
+    exact = adcc.run_adc(matrix, n_singlets=10, n_guesses=10, conv_tol=1e-8, output=None)
     raw = adcc.run_adc(matrix, finalize_relinearized=False, **kwargs)
     with pytest.warns(UserWarning, match="not described by the fold"):
         final = adcc.run_adc(matrix, **kwargs)
     pole = final.matrix._lowest_eliminated_d0
     above = raw.excitation_energy >= pole
     assert np.count_nonzero(above) == 2
-    assert final.excitation_energy[above] == pytest.approx(
-        raw.excitation_energy[above])
+    assert final.excitation_energy[above] == pytest.approx(raw.excitation_energy[above])
     assert final.excitation_energy[~above] == pytest.approx(
-        exact.excitation_energy[~above], abs=1e-3)
+        exact.excitation_energy[~above], abs=1e-3
+    )
 
 
 def relinearized_s1(guess_energies):
     """x_P, b and raw omega of the water/STO-3G S1 without explicit
     configurations, for a guess energy far above it (omega < root)."""
     matrix = adc2_matrix("h2o_sto3g")
-    state = adcc.run_adc(matrix, n_singlets=1, conv_tol=1e-8, relin=True,
-                         guess_energies=guess_energies, explicit_width=0.0,
-                         finalize_relinearized=False, output=None)
+    state = adcc.run_adc(
+        matrix,
+        n_singlets=1,
+        conv_tol=1e-8,
+        relin=True,
+        guess_energies=guess_energies,
+        explicit_width=0.0,
+        finalize_relinearized=False,
+        output=None,
+    )
     rel = state.matrix
     x_p = rel._active_masked(state.excitation_vector[0])
     b = rel._coupling_into_eliminated(x_p)
@@ -184,9 +216,7 @@ def test_newton_bracketed_by_lowest_pole(guess_energies):
     # replaced by bisection, without changing the root.
     rel._lowest_eliminated_d0 = root + 1e-7
     output = io.StringIO()
-    root_bracketed, _, _ = rel._self_consistent_energy(x_p, b, omega,
-                                                       tol=1e-12,
-                                                       output=output)
+    root_bracketed, _, _ = rel._self_consistent_energy(x_p, b, omega, tol=1e-12, output=output)
     assert "(bisection)" in output.getvalue()
     assert root_bracketed == pytest.approx(root, abs=1e-10)
 
@@ -200,8 +230,7 @@ def test_raw_pair_kept_for_nan_omega():
 
 def test_no_eliminated_configurations():
     # An explicit window covering every configuration leaves no pole.
-    rel = RelinearizedAdcMatrix(adc2_matrix("h2o_sto3g"), 0.5,
-                                explicit_width=100.0)
+    rel = RelinearizedAdcMatrix(adc2_matrix("h2o_sto3g"), 0.5, explicit_width=100.0)
     assert rel.window_occupancy["order-0"]["count"] == 0
     assert rel._lowest_eliminated_d0 == np.inf
 
@@ -217,22 +246,22 @@ def test_raw_pair_kept_if_iteration_ends_at_pole():
     assert energy == omega and vector is ampl and n_steps == 0
 
 
-@pytest.mark.parametrize("case,method,n_singlets", [
-    ("gen", "adc2", 12),     # more states than singles guesses
-    ("gen", "adc2", 6),      # fewer guesses than requested by default
-    ("fv", "adc2", 3),
-    ("cvs", "cvs-adc2", 2),
-    ("cvs", "cvs-adc2", 3),
-])
+@pytest.mark.parametrize(
+    "case,method,n_singlets",
+    [
+        ("gen", "adc2", 12),  # more states than singles guesses
+        ("gen", "adc2", 6),  # fewer guesses than requested by default
+        ("fv", "adc2", 3),
+        ("cvs", "cvs-adc2", 2),
+        ("cvs", "cvs-adc2", 3),
+    ],
+)
 def test_few_guesses(case, method, n_singlets):
     refstate = testdata_cache.refstate("h2o_sto3g", case=case)
     matrix = adcc.AdcMatrix(method, adcc.LazyMp(refstate))
-    exact = adcc.run_adc(matrix, n_singlets=n_singlets, conv_tol=1e-8,
-                         output=None)
-    final = adcc.run_adc(matrix, n_singlets=n_singlets, conv_tol=1e-8,
-                         relin=True, output=None)
-    assert final.excitation_energy == pytest.approx(exact.excitation_energy,
-                                                    abs=1e-4)
+    exact = adcc.run_adc(matrix, n_singlets=n_singlets, conv_tol=1e-8, output=None)
+    final = adcc.run_adc(matrix, n_singlets=n_singlets, conv_tol=1e-8, relin=True, output=None)
+    assert final.excitation_energy == pytest.approx(exact.excitation_energy, abs=1e-4)
 
 
 def test_fold_finite_at_explicit_diagonal():
@@ -249,29 +278,37 @@ def test_fold_finite_at_explicit_diagonal():
     assert np.all(np.isfinite(x_q.pphh.to_ndarray()))
 
 
-@pytest.mark.parametrize("system,kind,n_states,n_reference", [
-    ("h2o_sto3g", "triplet", 3, 3),
-    ("h2o_def2tzvp", "triplet", 3, 3),
-    # The full solver needs more states to find the lowest 4 for CN
-    ("cn_sto3g", "any", 4, 6),
-    ("cn_ccpvdz", "any", 3, 3),
-])
+@pytest.mark.parametrize(
+    "system,kind,n_states,n_reference",
+    [
+        ("h2o_sto3g", "triplet", 3, 3),
+        ("h2o_def2tzvp", "triplet", 3, 3),
+        # The full solver needs more states to find the lowest 4 for CN
+        ("cn_sto3g", "any", 4, 6),
+        ("cn_ccpvdz", "any", 3, 3),
+    ],
+)
 def test_other_kinds(system, kind, n_states, n_reference):
     matrix = adc2_matrix(system)
-    exact = adcc.run_adc(matrix, n_states=n_reference, kind=kind,
-                         conv_tol=1e-8, output=None)
-    final = adcc.run_adc(matrix, n_states=n_states, kind=kind, conv_tol=1e-8,
-                         relin=True, output=None)
-    assert final.excitation_energy == pytest.approx(
-        exact.excitation_energy[:n_states], abs=1e-4)
+    exact = adcc.run_adc(matrix, n_states=n_reference, kind=kind, conv_tol=1e-8, output=None)
+    final = adcc.run_adc(
+        matrix, n_states=n_states, kind=kind, conv_tol=1e-8, relin=True, output=None
+    )
+    assert final.excitation_energy == pytest.approx(exact.excitation_energy[:n_states], abs=1e-4)
 
 
-@pytest.mark.parametrize("system,case", [
-    ("h2o_sto3g", "gen"), ("h2o_sto3g", "fc"), ("h2o_sto3g", "fv"),
-    ("h2o_sto3g", "cvs"), ("cn_sto3g", "gen"), ("cn_sto3g", "fc-fv"),
-])
-@pytest.mark.parametrize("omega,width", [(0.5, 1.0), (0.8, 0.0), (1.0, 1.5),
-                                         ([0.3, 0.5], 0.5)])
+@pytest.mark.parametrize(
+    "system,case",
+    [
+        ("h2o_sto3g", "gen"),
+        ("h2o_sto3g", "fc"),
+        ("h2o_sto3g", "fv"),
+        ("h2o_sto3g", "cvs"),
+        ("cn_sto3g", "gen"),
+        ("cn_sto3g", "fc-fv"),
+    ],
+)
+@pytest.mark.parametrize("omega,width", [(0.5, 1.0), (0.8, 0.0), (1.0, 1.5), ([0.3, 0.5], 0.5)])
 def test_masks_match_dense_selection(system, case, omega, width):
     method = "cvs-adc2" if "cvs" in case else "adc2"
     refstate = testdata_cache.refstate(system, case=case)
@@ -281,8 +318,7 @@ def test_masks_match_dense_selection(system, case, omega, width):
     diagonal = rel.diagonal_0.pphh.to_ndarray()
     active = rel._mask_active_tensor.to_ndarray() > 0.5
     inactive = rel._mask_inactive_tensor.to_ndarray() > 0.5
-    np.testing.assert_array_equal(active,
-                                  diagonal <= rel.omega_screen + width)
+    np.testing.assert_array_equal(active, diagonal <= rel.omega_screen + width)
     np.testing.assert_array_equal(inactive, ~active)
 
     # The pole is the lowest eliminated element (conservatively including
@@ -310,20 +346,18 @@ def test_explicit_guess_count_reduced_with_warning():
     # explicit doubles to offer as guesses.
     matrix = adc2_matrix("h2o_sto3g")
     with pytest.warns(UserWarning, match="Only 10 guesses available"):
-        adcc.run_adc(matrix, n_singlets=3, n_guesses=12, relin=True,
-                     output=None)
+        adcc.run_adc(matrix, n_singlets=3, n_guesses=12, relin=True, output=None)
 
 
 def test_missing_doubles_guesses_filled_with_singles():
     from adcc.workflow import obtain_guesses_by_inspection
 
     matrix = adc2_matrix("h2o_sto3g")
-    state = adcc.run_adc(matrix, n_singlets=3, conv_tol=1e-8, relin=True,
-                         output=None)
+    state = adcc.run_adc(matrix, n_singlets=3, conv_tol=1e-8, relin=True, output=None)
     with pytest.warns(UserWarning, match="Only 0 doubles guesses"):
-        guesses = obtain_guesses_by_inspection(state.matrix, 6, "singlet",
-                                               n_guesses_doubles=2,
-                                               min_guesses=3)
+        guesses = obtain_guesses_by_inspection(
+            state.matrix, 6, "singlet", n_guesses_doubles=2, min_guesses=3
+        )
     assert len(guesses) == 6
 
 
@@ -332,8 +366,10 @@ def test_extra_terms():
     ones = matrix.diagonal().ones_like()
 
     def shift_ph(hf, mp, intermediates):
-        return AdcBlock(lambda v: adcc.AmplitudeVector(ph=0.1 * v.ph),
-                        adcc.AmplitudeVector(ph=0.1 * ones.ph))
+        return AdcBlock(
+            lambda v: adcc.AmplitudeVector(ph=0.1 * v.ph), adcc.AmplitudeVector(ph=0.1 * ones.ph)
+        )
+
     term = AdcExtraTerm(matrix, {"ph_ph": shift_ph})
 
     # Terms on the input matrix would be dropped by the rebuild.
@@ -347,25 +383,30 @@ def test_extra_terms():
 
     # A term on the complementary block would be ignored by the fold.
     def shift_pphh(hf, mp, intermediates):
-        return AdcBlock(lambda v: adcc.AmplitudeVector(pphh=0.1 * v.pphh),
-                        adcc.AmplitudeVector(pphh=0.1 * ones.pphh))
+        return AdcBlock(
+            lambda v: adcc.AmplitudeVector(pphh=0.1 * v.pphh),
+            adcc.AmplitudeVector(pphh=0.1 * ones.pphh),
+        )
+
     with pytest.raises(NotImplementedError):
         rel += AdcExtraTerm(matrix, {"pphh_pphh": shift_pphh})
 
     # In place (as run_adc adds environment terms) the term is applied.
-    exact = adcc.run_adc(matrix + term, n_singlets=2, conv_tol=1e-8,
-                         output=None)
+    exact = adcc.run_adc(matrix + term, n_singlets=2, conv_tol=1e-8, output=None)
     rel += term
     final = adcc.run_adc(rel, n_singlets=2, conv_tol=1e-8, output=None)
-    assert final.excitation_energy == pytest.approx(exact.excitation_energy,
-                                                    abs=1e-5)
+    assert final.excitation_energy == pytest.approx(exact.excitation_energy, abs=1e-5)
 
 
-@pytest.mark.parametrize("kwargs", [
-    dict(omega_guess=[]), dict(omega_guess=[0.5, np.nan]),
-    dict(omega_guess=0.5, explicit_width=-0.1),
-    dict(omega_guess=0.5, explicit_width=np.inf),
-])
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"omega_guess": []},
+        {"omega_guess": [0.5, np.nan]},
+        {"omega_guess": 0.5, "explicit_width": -0.1},
+        {"omega_guess": 0.5, "explicit_width": np.inf},
+    ],
+)
 def test_invalid_parameters(kwargs):
     with pytest.raises(ValueError):
         RelinearizedAdcMatrix(adc2_matrix("h2o_sto3g"), **kwargs)

@@ -16,12 +16,12 @@
 // You should have received a copy of the GNU General Public License
 // along with adcc. If not, see <http://www.gnu.org/licenses/>.
 //
+#include <pybind11/pybind11.h>  // Python.h must be included first, see python docs
 
 #include "../ReferenceState.hh"
 #include "hartree_fock_solution_hack.hh"
 #include "ndarray.hh"
 #include <pybind11/numpy.h>
-#include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
 namespace libadcc {
@@ -64,7 +64,8 @@ void export_ReferenceState(py::module& m) {
   reference_state
         .def(py::init<std::shared_ptr<const HartreeFockSolution_i>,
                       std::shared_ptr<const MoSpaces>, bool>(),
-             py::arg("hfsoln"), py::arg("mo"), py::arg("symmetry_check_on_import"),
+             py::arg("hfsoln").none(false), py::arg("mo").none(false),
+             py::arg("symmetry_check_on_import"),
              "Setup a ReferenceStateject using an MoSpaces object.\n"
              "\n"
              "hfsoln            Pointer to the Interface to the host program,\n"

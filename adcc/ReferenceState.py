@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 ## vi: tabstop=4 shiftwidth=4 softtabstop=4 expandtab
 ## ---------------------------------------------------------------------
 ##
@@ -22,24 +21,31 @@
 ## ---------------------------------------------------------------------
 import numpy as np
 
-from .misc import cached_property
-from .Tensor import Tensor
-from .MoSpaces import split_spaces, MoSpaces
-from .backends import import_scf_results
-from .OperatorIntegrals import OperatorIntegrals
-from .OneParticleDensity import OneParticleDensity
-from .TwoParticleDensity import TwoParticleDensity
-from .NParticleOperator import product_trace, OperatorSymmetry
-
 import libadcc
+
+from .backends import import_scf_results
+from .block import split_spaces
+from .misc import cached_property
+from .MoSpaces import MoSpaces
+from .NParticleOperator import OperatorSymmetry, product_trace
+from .OneParticleDensity import OneParticleDensity
+from .OperatorIntegrals import OperatorIntegrals
+from .Tensor import Tensor
+from .TwoParticleDensity import TwoParticleDensity
 
 __all__ = ["ReferenceState"]
 
 
 class ReferenceState(libadcc.ReferenceState):
-    def __init__(self, hfdata, core_orbitals=None, frozen_core=None,
-                 frozen_virtual=None, symmetry_check_on_import=False,
-                 import_all_below_n_orbs=10):
+    def __init__(
+        self,
+        hfdata,
+        core_orbitals=None,
+        frozen_core=None,
+        frozen_virtual=None,
+        symmetry_check_on_import=False,
+        import_all_below_n_orbs=10,
+    ):
         """Construct a ReferenceState holding information about the employed
         SCF reference.
 
@@ -61,9 +67,9 @@ class ReferenceState(libadcc.ReferenceState):
               into the orbital subspace.
            c. An explicit list of orbital indices to be placed into the
               subspace.
-           d. A pair of (a) to (c): If the orbital selection for alpha and
+           d. A pair of (b) or (c): If the orbital selection for alpha and
               beta orbitals should differ, a pair of ranges, or a pair of
-              index lists or a pair of numbers can be specified.
+              index lists can be specified.
 
         Parameters
         ----------
@@ -74,17 +80,15 @@ class ReferenceState(libadcc.ReferenceState):
             object representing a pointer to a C++ object derived off
             the :cpp:class:`adcc::HartreeFockSolution_i`.
 
-        core_orbitals : int or list or tuple, optional
+        core_orbitals : int or collection of int or pair of collections of int, optional
             The orbitals to be put into the core-occupied space. For ways to
             define the core orbitals see the description above.
 
-        frozen_core : int or list or tuple, optional
+        frozen_core : int or collection of int or pair of collections of int, optional
             The orbitals to be put into the frozen core space. For ways to
-            define the core orbitals see the description above. For an automatic
-            selection of the frozen core space one may also specify
-            ``frozen_core=True``.
+            define the core orbitals see the description above.
 
-        frozen_virtuals : int or list or tuple, optional
+        frozen_virtual : int or collection of int or pair of collections of int, optional
             The orbitals to be put into the frozen virtual space. For ways to
             define the core orbitals see the description above.
 
@@ -143,19 +147,24 @@ class ReferenceState(libadcc.ReferenceState):
         if not isinstance(hfdata, libadcc.HartreeFockSolution_i):
             hfdata = import_scf_results(hfdata)
 
-        self._mospaces = MoSpaces(hfdata, frozen_core=frozen_core,
-                                  frozen_virtual=frozen_virtual,
-                                  core_orbitals=core_orbitals)
+        self._mospaces = MoSpaces(
+            hfdata,
+            frozen_core=frozen_core,
+            frozen_virtual=frozen_virtual,
+            core_orbitals=core_orbitals,
+        )
         super().__init__(hfdata, self._mospaces, symmetry_check_on_import)
 
-        if import_all_below_n_orbs is not None and \
-           hfdata.n_orbs < import_all_below_n_orbs:
+        if import_all_below_n_orbs is not None and hfdata.n_orbs < import_all_below_n_orbs:
             super().import_all()
 
         self.operators = OperatorIntegrals(
-            hfdata.operator_integral_provider, self._mospaces,
-            self.orbital_coefficients, self.orbital_coefficients_alpha,
-            self.orbital_coefficients_beta, self.conv_tol
+            hfdata.operator_integral_provider,
+            self._mospaces,
+            self.orbital_coefficients,
+            self.orbital_coefficients_alpha,
+            self.orbital_coefficients_beta,
+            self.conv_tol,
         )
 
         self.environment = None  # no environment attached by default
@@ -187,10 +196,14 @@ class ReferenceState(libadcc.ReferenceState):
         Returns whether the molecular orbital occupation in this reference
         is according to the Aufbau principle (lowest-energy orbitals are occupied)
         """
-        eHOMO = max(max(self.orbital_energies(space).to_ndarray())
-                    for space in self.mospaces.subspaces_occupied)
-        eLUMO = min(min(self.orbital_energies(space).to_ndarray())
-                    for space in self.mospaces.subspaces_virtual)
+        eHOMO = max(
+            max(self.orbital_energies(space).to_ndarray())
+            for space in self.mospaces.subspaces_occupied
+        )
+        eLUMO = min(
+            min(self.orbital_energies(space).to_ndarray())
+            for space in self.mospaces.subspaces_virtual
+        )
         return eHOMO < eLUMO
 
     def to_qcvars(self, properties=False, recurse=False):
@@ -198,7 +211,9 @@ class ReferenceState(libadcc.ReferenceState):
         Return a dictionary with property keys compatible to a Psi4 wavefunction
         or a QCEngine Atomicresults object.
         """
-        qcvars = {"HF TOTAL ENERGY": self.energy_scf, }
+        qcvars = {
+            "HF TOTAL ENERGY": self.energy_scf,
+        }
         if properties:
             qcvars["HF DIPOLE"] = self.dipole_moment
         return qcvars
@@ -208,11 +223,11 @@ class ReferenceState(libadcc.ReferenceState):
         """
         Return the Hartree-Fock density in the MO basis
         """
-        density = OneParticleDensity(self.mospaces,
-                                     symmetry=OperatorSymmetry.HERMITIAN)
+        density = OneParticleDensity(self.mospaces, symmetry=OperatorSymmetry.HERMITIAN)
         for block in density.canonical_blocks:
-            sym = libadcc.make_symmetry_operator(self.mospaces, block,
-                                                 density.symmetry.to_str(), "1")
+            sym = libadcc.make_symmetry_operator(
+                self.mospaces, block, density.symmetry.to_str(), "1"
+            )
             density[block] = Tensor(sym)
         for ss in self.mospaces.subspaces_occupied:
             density[ss + ss].set_mask("ii", 1)
@@ -227,8 +242,7 @@ class ReferenceState(libadcc.ReferenceState):
         # NOTE: running over canonical blocks here, to avoid incorporating
         # implicitly knowledge about the definition of a canonical block in
         # the implementation
-        density = TwoParticleDensity(self.mospaces,
-                                     symmetry=OperatorSymmetry.HERMITIAN)
+        density = TwoParticleDensity(self.mospaces, symmetry=OperatorSymmetry.HERMITIAN)
         # gamma_ijkl = delta_ik delta_jl - delta_il delta_jk
         for block in density.canonical_blocks:
             splitted = split_spaces(block)
@@ -255,8 +269,9 @@ class ReferenceState(libadcc.ReferenceState):
         the electronic and the nuclear contribution.)
         """
         dipole_integrals = self.operators.electric_dipole
-        return self.nuclear_dipole + np.array([product_trace(comp, self.density)
-                                               for comp in dipole_integrals])
+        return self.nuclear_dipole + np.array(
+            [product_trace(comp, self.density) for comp in dipole_integrals]
+        )
 
     def nuclear_quadrupole(self, gauge_origin="origin"):
         if isinstance(gauge_origin, str):
@@ -269,13 +284,12 @@ class ReferenceState(libadcc.ReferenceState):
         Return <S^2> of the HF reference state.
         """
         if self.restricted:
-            raise NotImplementedError(
-                "<S^2> is not implemented for restricted HF references."
-            )
+            raise NotImplementedError("<S^2> is not implemented for restricted HF references.")
         ssq_1p_op = self.operators.ssq_1p
         ssq_2p_op = self.operators.ssq_2p
         ssq_1p = product_trace(ssq_1p_op, self.density)
         ssq_2p = product_trace(ssq_2p_op, self.density_2p)
-        return (ssq_1p + ssq_2p)
+        return ssq_1p + ssq_2p
+
 
 # TODO some nice describe method

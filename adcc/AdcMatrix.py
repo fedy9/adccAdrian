@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 ## vi: tabstop=4 shiftwidth=4 softtabstop=4 expandtab
 ## ---------------------------------------------------------------------
 ##
@@ -22,18 +21,20 @@
 ## ---------------------------------------------------------------------
 import itertools
 import warnings
+from typing import ClassVar
+
 import numpy as np
 
 import libadcc
 
-from .LazyMp import LazyMp
 from .adc_pp import matrix as ppmatrix
-from .timings import Timer, timed_member_call
-from .AdcMethod import AdcMethod, Method, AdcType
-from .functions import ones_like, evaluate
-from .Intermediates import Intermediates
+from .AdcMethod import AdcMethod, AdcType, Method
 from .AmplitudeVector import AmplitudeVector
 from .ComplementaryBlockInverter import ComplementaryBlockInverter
+from .functions import evaluate, ones_like
+from .Intermediates import Intermediates
+from .LazyMp import LazyMp
+from .timings import Timer, timed_member_call
 
 
 class AdcExtraTerm:
@@ -62,9 +63,7 @@ class AdcExtraTerm:
             block_fun = blocks[space]
             if not callable(block_fun):
                 raise TypeError("Items in additional_blocks must be callable.")
-            block = block_fun(
-                self.reference_state, self.ground_state, self.intermediates
-            )
+            block = block_fun(self.reference_state, self.ground_state, self.intermediates)
             self.blocks[space] = block
 
 
@@ -73,7 +72,7 @@ class AdcMatrixlike:
     Base class marker for all objects like ADC matrices.
     """
 
-    _special_block_orders = {
+    _special_block_orders: ClassVar = {
         "adc2x": {"ph_ph": 2, "ph_pphh": 1, "pphh_ph": 1, "pphh_pphh": 1},
         "isr1s": {"ph_ph": 1, "ph_pphh": None, "pphh_ph": None, "pphh_pphh": None},
         "isr2d": {"ph_ph": 2, "ph_pphh": 1, "pphh_ph": 1, "pphh_pphh": 0},
@@ -81,8 +80,7 @@ class AdcMatrixlike:
     }
 
     @classmethod
-    def _default_block_orders(cls, method: Method,
-                              bandwidth: int) -> dict[str, int]:
+    def _default_block_orders(cls, method: Method, bandwidth: int) -> dict[str, int]:
         """
         Determines the default block orders for the given adc method.
 
@@ -98,34 +96,29 @@ class AdcMatrixlike:
         # check if we have a special method like adc2x
         # I guess base_method should also contain the adc_type prefix so
         # we don't need to separate different adc_types
-        block_orders = cls._special_block_orders.get(
-            method.base_method.name, None
-        )
+        block_orders = cls._special_block_orders.get(method.base_method.name, None)
         if block_orders is not None:
             return block_orders.copy()
         # otherwise assume that we have a "normal" PP/IP/...-ADC(n) method
         # - determine which spaces are available in the ADC(n) matrix
         #   starting from the given minimal space
-        min_space = {
-            AdcType.PP: "ph"
-        }.get(method.adc_type, None)
+        min_space = {AdcType.PP: "ph"}.get(method.adc_type, None)
         if min_space is None:
-            raise ValueError(f"Unknown adc type {method.adc_type.to_str()} for "
-                             f"method {method.name}. Can not determine default "
-                             "block orders.")
+            raise ValueError(
+                f"Unknown adc type {method.adc_type.to_str()} for "
+                f"method {method.name}. Can not determine default "
+                "block orders."
+            )
         assert bandwidth >= 0
         n_spaces = ((method.level.to_int() + bandwidth) // 2) + 1
-        spaces = [
-            "p" * i + min_space + "h" * i for i in range(0, n_spaces)
-        ]
+        spaces = ["p" * i + min_space + "h" * i for i in range(n_spaces)]
         # exploit the fact that the spaces are sorted from small to high:
         # If we walk the adc matrix in any direction we always have to subtract 1!
         # Therefore, we can determine the order according to the position of the
         # spaces: maxorder - 0 for singles, maxorder - 2 for doubles and
         # maxorder - 3 for the doubles/triples coupling
         ret = {}
-        for ((i1, bra), (i2, ket)) in \
-                itertools.product(enumerate(spaces), repeat=2):
+        for (i1, bra), (i2, ket) in itertools.product(enumerate(spaces), repeat=2):
             order = method.level.to_int() - i1 - i2
             # For ISR matrices allow missing diagonal blocks.
             order = None if order < 0 else order
@@ -133,9 +126,12 @@ class AdcMatrixlike:
         return ret
 
     @classmethod
-    def _validate_block_orders(cls, block_orders: dict[str, int],
-                               method: Method,
-                               allow_missing_diagonal_blocks: bool = False) -> None:
+    def _validate_block_orders(
+        cls,
+        block_orders: dict[str, int],
+        method: Method,
+        allow_missing_diagonal_blocks: bool = False,
+    ) -> None:
         """
         Validates that the given block_orders form a valid adc/isr matrix for the
         given adc(isr) method.
@@ -160,18 +156,17 @@ class AdcMatrixlike:
             assert order >= 0
             # ensure that the block is valid for the given adc type
             bra, ket = block.split("_")
-            if not cls._is_valid_space(bra, method) or \
-                    not cls._is_valid_space(ket, method):
-                raise ValueError(f"Invalid block {block} for a "
-                                 f"{method.adc_type.to_str()} ADC matrix.")
+            if not cls._is_valid_space(bra, method) or not cls._is_valid_space(ket, method):
+                raise ValueError(
+                    f"Invalid block {block} for a {method.adc_type.to_str()} ADC matrix."
+                )
             if bra == ket:  # done for diagonal blocks
                 continue
             # ensure that the matrix is symmetric
             inv_block = f"{ket}_{bra}"
             inv_order = block_orders.get(inv_block, None)
             if inv_order is None or inv_order != order:
-                raise ValueError(f"{block} and {inv_block} should always have "
-                                 "the same order.")
+                raise ValueError(f"{block} and {inv_block} should always have the same order.")
             if allow_missing_diagonal_blocks:
                 continue
             # ensure that we have no coupling between missing diagonal blocks
@@ -180,9 +175,11 @@ class AdcMatrixlike:
             bra_diag_order = block_orders.get(bra_diag, None)
             ket_diag_order = block_orders.get(ket_diag, None)
             if bra_diag_order is None or ket_diag_order is None:
-                raise ValueError(f"Can only have a couling block {block} "
-                                 f"if both diagonal blocks {bra_diag} and "
-                                 f"{ket_diag} are in the matrix too.")
+                raise ValueError(
+                    f"Can only have a couling block {block} "
+                    f"if both diagonal blocks {bra_diag} and "
+                    f"{ket_diag} are in the matrix too."
+                )
 
     @classmethod
     def _is_valid_space(cls, space: str, method: Method) -> bool:
@@ -199,14 +196,16 @@ class AdcMatrixlike:
         # be equal or differ e.g. by +-1 (IP/EA)
         if method.adc_type is AdcType.PP:
             return n_particle == n_hole
-        raise ValueError(f"Unknown adc type {method.adc_type.to_str()} for method "
-                         f"{method.name}. Can not validate space.")
+        raise ValueError(
+            f"Unknown adc type {method.adc_type.to_str()} for method "
+            f"{method.name}. Can not validate space."
+        )
 
 
 class AdcMatrix(AdcMatrixlike):
-
-    def __init__(self, method, hf_or_mp, block_orders=None, intermediates=None,
-                 diagonal_precomputed=None):
+    def __init__(
+        self, method, hf_or_mp, block_orders=None, intermediates=None, diagonal_precomputed=None
+    ):
         """
         Initialise an ADC matrix.
 
@@ -224,24 +223,23 @@ class AdcMatrix(AdcMatrixlike):
         diagonal_precomputed: adcc.AmplitudeVector
             Allows to pass a pre-computed diagonal, for internal use only.
         """
-        if isinstance(hf_or_mp, (libadcc.ReferenceState,
-                                 libadcc.HartreeFockSolution_i)):
+        if isinstance(hf_or_mp, (libadcc.ReferenceState, libadcc.HartreeFockSolution_i)):
             hf_or_mp = LazyMp(hf_or_mp)
         if not isinstance(hf_or_mp, LazyMp):
-            raise TypeError("hf_or_mp is not a valid object. It needs to be "
-                            "either a LazyMp, a ReferenceState or a "
-                            "HartreeFockSolution_i.")
+            raise TypeError(
+                "hf_or_mp is not a valid object. It needs to be "
+                "either a LazyMp, a ReferenceState or a "
+                "HartreeFockSolution_i."
+            )
 
         if not isinstance(method, AdcMethod):
             method = AdcMethod(method)
 
         if diagonal_precomputed:
             if not isinstance(diagonal_precomputed, AmplitudeVector):
-                raise TypeError("diagonal_precomputed needs to be"
-                                " an AmplitudeVector.")
+                raise TypeError("diagonal_precomputed needs to be an AmplitudeVector.")
             if diagonal_precomputed.needs_evaluation:
-                raise ValueError("diagonal_precomputed must already"
-                                 " be evaluated.")
+                raise ValueError("diagonal_precomputed must already be evaluated.")
 
         self.timer = Timer()
         self.method = method
@@ -256,14 +254,11 @@ class AdcMatrix(AdcMatrixlike):
         if self.intermediates is None:
             self.intermediates = Intermediates(self.ground_state)
 
-        self.block_orders = self._default_block_orders(
-            self.method, bandwidth=0
-        )
+        self.block_orders = self._default_block_orders(self.method, bandwidth=0)
         if block_orders is not None:
             self.block_orders.update(block_orders)
         self._validate_block_orders(
-            block_orders=self.block_orders, method=self.method,
-            allow_missing_diagonal_blocks=False
+            block_orders=self.block_orders, method=self.method, allow_missing_diagonal_blocks=False
         )
 
         # Build the blocks and diagonals
@@ -272,10 +267,15 @@ class AdcMatrix(AdcMatrixlike):
             if self.is_core_valence_separated:
                 variant = "cvs"
             blocks = {
-                block: ppmatrix.block(self.ground_state, block.split("_"),
-                                      order=order, intermediates=self.intermediates,
-                                      variant=variant)
-                for block, order in self.block_orders.items() if order is not None
+                block: ppmatrix.block(
+                    self.ground_state,
+                    block.split("_"),
+                    order=order,
+                    intermediates=self.intermediates,
+                    variant=variant,
+                )
+                for block, order in self.block_orders.items()
+                if order is not None
             }
             self.blocks = {bl: blocks[bl].apply for bl in blocks}
             if diagonal_precomputed:
@@ -298,17 +298,16 @@ class AdcMatrix(AdcMatrixlike):
         if not isinstance(other, AdcExtraTerm):
             return NotImplemented
         if not all(k in self.blocks for k in other.blocks):
-            raise ValueError("Can only add to blocks of"
-                             " AdcMatrix that already exist.")
+            raise ValueError("Can only add to blocks of AdcMatrix that already exist.")
         for sp in other.blocks:
             orig_app = self.blocks[sp]
             other_app = other.blocks[sp].apply
 
             def patched_apply(ampl, original=orig_app, other=other_app):
                 return sum(app(ampl) for app in (original, other))
+
             self.blocks[sp] = patched_apply
-        other_diagonal = sum(bl.diagonal for bl in other.blocks.values()
-                             if bl.diagonal)
+        other_diagonal = sum(bl.diagonal for bl in other.blocks.values() if bl.diagonal)
         self._diagonal = self._diagonal + other_diagonal
         self._diagonal.evaluate()
         self.extra_terms.append(other)
@@ -330,10 +329,13 @@ class AdcMatrix(AdcMatrixlike):
         """
         if not isinstance(other, AdcExtraTerm):
             return NotImplemented
-        ret = AdcMatrix(self.method, self.ground_state,
-                        block_orders=self.block_orders,
-                        intermediates=self.intermediates,
-                        diagonal_precomputed=self.diagonal())
+        ret = AdcMatrix(
+            self.method,
+            self.ground_state,
+            block_orders=self.block_orders,
+            intermediates=self.intermediates,
+            diagonal_precomputed=self.diagonal(),
+        )
         ret += other
         return ret
 
@@ -346,11 +348,10 @@ class AdcMatrix(AdcMatrixlike):
         self.axis_lengths = {}
         for block in diagonal.blocks:
             self.axis_spaces[block] = getattr(diagonal, block).subspaces
-            self.axis_lengths[block] = np.prod([
-                self.mospaces.n_orbs(sp) for sp in self.axis_spaces[block]
-            ])
-        self.shape = (sum(self.axis_lengths.values()),
-                      sum(self.axis_lengths.values()))
+            self.axis_lengths[block] = np.prod(
+                [self.mospaces.n_orbs(sp) for sp in self.axis_spaces[block]]
+            )
+        self.shape = (sum(self.axis_lengths.values()), sum(self.axis_lengths.values()))
 
     def __repr__(self):
         ret = f"AdcMatrix({self.method.name}, "
@@ -405,9 +406,8 @@ class AdcMatrix(AdcMatrixlike):
     def __matmul__(self, other):
         if isinstance(other, AmplitudeVector):
             return self.matvec(other)
-        if isinstance(other, list):
-            if all(isinstance(elem, AmplitudeVector) for elem in other):
-                return [self.matvec(ov) for ov in other]
+        if isinstance(other, list) and all(isinstance(elem, AmplitudeVector) for elem in other):
+            return [self.matvec(ov) for ov in other]
         return NotImplemented
 
     def block_view(self, block):
@@ -417,19 +417,21 @@ class AdcMatrix(AdcMatrixlike):
         """
         b1, b2 = block.split("_")
         if b1 != b2:
-            raise NotImplementedError("Off-diagonal block views not yet "
-                                      "implemented.")
+            raise NotImplementedError("Off-diagonal block views not yet implemented.")
             # TODO For off-diagonal blocks we probably need a different
             #      data structure as the AdcMatrix class as these block
             #      are inherently different than an AdcMatrix (no Hermiticity
             #      for example) and basically they only need to support some
             #      form of matrix-vector product and some statistics like
             #      spaces and sizes etc.
-        block_orders = {bl: None for bl in self.block_orders.keys()}
+        block_orders = {bl: None for bl in self.block_orders}
         block_orders[block] = self.block_orders[block]
-        return AdcMatrix(self.method, self.ground_state,
-                         block_orders=block_orders,
-                         intermediates=self.intermediates)
+        return AdcMatrix(
+            self.method,
+            self.ground_state,
+            block_orders=block_orders,
+            intermediates=self.intermediates,
+        )
 
     def construct_symmetrisation_for_blocks(self):
         """
@@ -449,20 +451,20 @@ class AdcMatrix(AdcMatrixlike):
             # CVS doubles part is antisymmetric wrt. (i,K,a,b) <-> (i,K,b,a)
             ret["pphh"] = lambda v: v.antisymmetrise([(2, 3)])
         else:
+
             def symmetrise_generic_adc_doubles(invec):
                 # doubles part is antisymmetric wrt. (i,j,a,b) <-> (i,j,b,a)
                 # doubles part is antisymmetric wrt. (i,j,a,b) <-> (j,i,a,b)
                 scratch = invec.antisymmetrise([(0, 1)]).antisymmetrise([(2, 3)])
                 # doubles part is symmetric wrt. (i,j,a,b) <-> (j,i,b,a)
                 return scratch.symmetrise([(0, 1), (2, 3)])
+
             ret["pphh"] = symmetrise_generic_adc_doubles
 
             def symmetrise_generic_adc_triples(invec):
                 # triples part is antisymmetric wrt. permutations of (i,j,k)
                 # and wrt. permutations of (a,b,c)
-                scratch = (
-                    invec.antisymmetrise([(0, 1, 2)]).antisymmetrise([(3, 4, 5)])
-                )
+                scratch = invec.antisymmetrise([(0, 1, 2)]).antisymmetrise([(3, 4, 5)])
                 # triples part is symmetric wrt. permutations of (i,j,k) and
                 # permutations of (a,b,c)
                 # NOTE: The doubles fix the (numerical) symmetry with a single
@@ -471,6 +473,7 @@ class AdcMatrix(AdcMatrixlike):
                 # even permutations generated by the 2 antisymmetrise calls above:
                 # ijkabc + ikjacb + jikbac + jkibca + kijcab + kjicba
                 return scratch.symmetrise([(0, 1, 2), (3, 4, 5)])
+
             ret["ppphhh"] = symmetrise_generic_adc_triples
         return ret
 
@@ -489,20 +492,21 @@ class AdcMatrix(AdcMatrixlike):
 
         # Define function to impose the order in the basis
         if ordering == "adcc":
+
             def reduce_index(n_orbsa, idx):
                 return idx, idx
         elif ordering == "spin":
+
             def reduce_index(n_orbsa, idx):
                 is_beta = [idx[i] >= n_orbsa[i] for i in range(len(idx))]
-                spatial = [idx[i] - n_orbsa[i] if is_beta[i] else idx[i]
-                           for i in range(len(idx))]
+                spatial = [idx[i] - n_orbsa[i] if is_beta[i] else idx[i] for i in range(len(idx))]
                 # Sort first by spin, then by spatial
                 return (is_beta, spatial)
         elif ordering == "spatial":
+
             def reduce_index(n_orbsa, idx):
                 is_beta = [idx[i] >= n_orbsa[i] for i in range(len(idx))]
-                spatial = [idx[i] - n_orbsa[i] if is_beta[i] else idx[i]
-                           for i in range(len(idx))]
+                spatial = [idx[i] - n_orbsa[i] if is_beta[i] else idx[i] for i in range(len(idx))]
                 # Sort first by spatial, then by spin
                 return (spatial, is_beta)
 
@@ -517,6 +521,7 @@ class AdcMatrix(AdcMatrixlike):
 
             def sortfctn(x):
                 return min(reduce_index(n_orbsa_s, idx) for idx, factor in x)
+
             ret_s.sort(key=sortfctn)
             ret_s.sort(key=sortfctn)
             ret.extend(ret_s)
@@ -529,38 +534,57 @@ class AdcMatrix(AdcMatrixlike):
             if sp_d[0] == sp_d[1] and sp_d[2] == sp_d[3]:
                 nso = self.mospaces.n_orbs(sp_d[0])
                 nsv = self.mospaces.n_orbs(sp_d[2])
-                ret_d.extend([[((i, j, a, b), +1 / 2),
-                               ((j, i, a, b), -1 / 2),
-                               ((i, j, b, a), -1 / 2),
-                               ((j, i, b, a), +1 / 2)]
-                              for i in range(nso) for j in range(i)
-                              for a in range(nsv) for b in range(a)])
+                ret_d.extend(
+                    [
+                        [
+                            ((i, j, a, b), +1 / 2),
+                            ((j, i, a, b), -1 / 2),
+                            ((i, j, b, a), -1 / 2),
+                            ((j, i, b, a), +1 / 2),
+                        ]
+                        for i in range(nso)
+                        for j in range(i)
+                        for a in range(nsv)
+                        for b in range(a)
+                    ]
+                )
             elif sp_d[2] == sp_d[3]:
                 nso = self.mospaces.n_orbs(sp_d[0])
                 nsc = self.mospaces.n_orbs(sp_d[1])
                 nsv = self.mospaces.n_orbs(sp_d[2])
-                ret_d.extend([[((i, j, a, b), +1 / np.sqrt(2)),
-                               ((i, j, b, a), -1 / np.sqrt(2))]
-                              for i in range(nso) for j in range(nsc)
-                              for a in range(nsv) for b in range(a)])
+                ret_d.extend(
+                    [
+                        [((i, j, a, b), +1 / np.sqrt(2)), ((i, j, b, a), -1 / np.sqrt(2))]
+                        for i in range(nso)
+                        for j in range(nsc)
+                        for a in range(nsv)
+                        for b in range(a)
+                    ]
+                )
             else:
                 nso = self.mospaces.n_orbs(sp_d[0])
                 nsc = self.mospaces.n_orbs(sp_d[1])
                 nsv = self.mospaces.n_orbs(sp_d[2])
                 nsw = self.mospaces.n_orbs(sp_d[3])
-                ret_d.append([((i, j, b, a), 1)
-                              for i in range(nso) for j in range(nsc)
-                              for a in range(nsv) for b in range(nsw)])
+                ret_d.append(
+                    [
+                        ((i, j, b, a), 1)
+                        for i in range(nso)
+                        for j in range(nsc)
+                        for a in range(nsv)
+                        for b in range(nsw)
+                    ]
+                )
 
             def sortfctn(x):
                 return min(reduce_index(n_orbsa_d, idx) for idx, factor in x)
+
             ret_d.sort(key=sortfctn)
             ret_d.sort(key=sortfctn)
             ret.extend(ret_d)
 
         if any(b not in ("ph", "pphh") for b in self.axis_blocks):
-            raise NotImplementedError("Blocks other than ph and pphh "
-                                      "not implemented")
+            raise NotImplementedError("Blocks other than ph and pphh not implemented")
         return ret
 
     def to_ndarray(self, out=None):
@@ -604,15 +628,16 @@ class AdcMatrix(AdcMatrixlike):
             out = np.zeros((mat_len, mat_len))
         else:
             if out.shape != (mat_len, mat_len):
-                raise ValueError("Output array has shape ({0:}, {1:}), but "
-                                 "shape ({2:}, {2:}) is required."
-                                 "".format(*out.shape, mat_len))
+                raise ValueError(
+                    "Output array has shape ({0:}, {1:}), but "
+                    "shape ({2:}, {2:}) is required."
+                    "".format(*out.shape, mat_len)
+                )
             out[:] = 0  # Zero all data in out.
 
         # Check for the cases actually implemented
         if any(b not in ("ph", "pphh") for b in self.axis_blocks):
-            raise NotImplementedError("Blocks other than ph and pphh "
-                                      "not implemented")
+            raise NotImplementedError("Blocks other than ph and pphh not implemented")
         if "ph" not in self.axis_blocks:
             raise NotImplementedError("Block 'ph' needs to be present")
 
@@ -633,8 +658,7 @@ class AdcMatrix(AdcMatrixlike):
             assert self.axis_blocks == ["ph", "pphh"]
             view_sd = out[:n_ph, n_ph:].reshape(*n_orbs_ph, len(basis["pphh"]))
             view_dd = out[n_ph:, n_ph:]
-            for j, bas1 in tqdm.tqdm(enumerate(basis["pphh"]),
-                                     total=len(basis["pphh"])):
+            for j, bas1 in tqdm.tqdm(enumerate(basis["pphh"]), total=len(basis["pphh"])):
                 ampl = ampl_zero.copy()
                 for idx, val in bas1:
                     ampl.pphh[idx] = val
@@ -642,8 +666,7 @@ class AdcMatrix(AdcMatrixlike):
                 view_sd[:, :, j] = ret_ampl.ph.to_ndarray()
 
                 for i, bas2 in enumerate(basis["pphh"]):
-                    view_dd[i, j] = sum(val * ret_ampl.pphh[idx]
-                                        for idx, val in bas2)
+                    view_dd[i, j] = sum(val * ret_ampl.pphh[idx] for idx, val in bas2)
 
             out[n_ph:, :n_ph] = np.transpose(out[:n_ph, n_ph:])
         return out
@@ -662,9 +685,12 @@ class AdcMatrixShifted(AdcMatrix):
         shift : float
             Value by which to shift the matrix
         """
-        super().__init__(matrix.method, matrix.ground_state,
-                         block_orders=matrix.block_orders,
-                         intermediates=matrix.intermediates)
+        super().__init__(
+            matrix.method,
+            matrix.ground_state,
+            block_orders=matrix.block_orders,
+            intermediates=matrix.intermediates,
+        )
         self.shift = shift
 
     def matvec(self, in_ampl):
@@ -690,15 +716,13 @@ class AdcMatrixShifted(AdcMatrix):
         return out
 
     def block_view(self, block):
-        raise NotImplementedError("Block-view not yet implemented for "
-                                  "shifted ADC matrices.")
+        raise NotImplementedError("Block-view not yet implemented for shifted ADC matrices.")
         # TODO The way to implement this is to ask the inner matrix to
         #      a block_view and then wrap that in an AdcMatrixShifted.
 
 
 class AdcMatrixProjected(AdcMatrix):
-    def __init__(self, matrix, excitation_blocks, core_orbitals=None,
-                 outer_virtuals=None):
+    def __init__(self, matrix, excitation_blocks, core_orbitals=None, outer_virtuals=None):
         """
         Initialise a projected ADC matrix, i.e. represents the expression
         ``P @ M @ P`` where ``P`` is a projector onto a subset of
@@ -712,8 +736,8 @@ class AdcMatrixProjected(AdcMatrix):
         (e.g. ``["cv", "ccvv", "ocvv"]``).
 
         For details on the option how to select the spaces, see the documentation
-        in :py:`adcc.ReferenceState.__init__` (``outer_virtuals`` follows the same
-        rules as ``frozen_virtuals``).
+        in :py:meth:`adcc.ReferenceState.__init__` (``outer_virtuals`` follows the same
+        rules as ``frozen_virtual``).
 
         Parameters
         ----------
@@ -721,37 +745,37 @@ class AdcMatrixProjected(AdcMatrix):
             Matrix which is projected
         excitation_blocks : list
             Excitation blocks to keep in the Amplitudes.
-        core_orbitals : int or list or tuple, optional
+        core_orbitals : int or collection of int or pair of collections of int, optional
             The orbitals to be put into the ``c`` core space.
-        outer_virtuals : int or list or tuple, optional
+        outer_virtuals : int or collection of int or pair of collections of int, optional
             The virtuals to be put into the ``w`` outer-virtual space.
         """
         from .projection import Projector, SubspacePartitioning
 
         for sp in excitation_blocks:
-            if not any(len(sp) == len(ax_sp)
-                       for ax_sp in matrix.axis_spaces.values()):
+            if not any(len(sp) == len(ax_sp) for ax_sp in matrix.axis_spaces.values()):
                 raise ValueError(f"Invalid partition block {sp}.")
 
-        super().__init__(matrix.method, matrix.ground_state,
-                         block_orders=matrix.block_orders,
-                         intermediates=matrix.intermediates)
-        partitioning = SubspacePartitioning(matrix.mospaces, core_orbitals,
-                                            outer_virtuals)
+        super().__init__(
+            matrix.method,
+            matrix.ground_state,
+            block_orders=matrix.block_orders,
+            intermediates=matrix.intermediates,
+        )
+        partitioning = SubspacePartitioning(matrix.mospaces, core_orbitals, outer_virtuals)
 
         projectors = {}
-        for block in matrix.axis_spaces.keys():
-            block_partitions = [sp for sp in excitation_blocks
-                                if len(sp) == len(matrix.axis_spaces[block])]
-            projectors[block] = Projector(matrix.axis_spaces[block],
-                                          partitioning, block_partitions)
+        for block in matrix.axis_spaces:
+            block_partitions = [
+                sp for sp in excitation_blocks if len(sp) == len(matrix.axis_spaces[block])
+            ]
+            projectors[block] = Projector(matrix.axis_spaces[block], partitioning, block_partitions)
         self.projectors = projectors
 
     def apply_projection(self, in_ampl):
-        return AmplitudeVector(**{
-            block: self.projectors[block] @ in_ampl[block]
-            for block in in_ampl.keys()
-        })
+        return AmplitudeVector(
+            **{block: self.projectors[block] @ in_ampl[block] for block in in_ampl}
+        )
 
     def matvec(self, in_ampl):
         in_proj = self.apply_projection(in_ampl)
@@ -766,7 +790,7 @@ class AdcMatrixProjected(AdcMatrix):
 
     def diagonal(self):
         blocks = {}
-        for (block, diagblock) in super().diagonal().items():
+        for block, diagblock in super().diagonal().items():
             # On the diagonal don't set the ignored amplitudes to zero,
             # but instead set them to a very large value to (a) avoid these being
             # selected for the initial guess and (b) ensure the preconditioning
@@ -777,8 +801,7 @@ class AdcMatrixProjected(AdcMatrix):
         return AmplitudeVector(**blocks)
 
     def block_view(self, block):
-        raise NotImplementedError("Block-view not yet implemented for "
-                                  "projected ADC matrices.")
+        raise NotImplementedError("Block-view not yet implemented for projected ADC matrices.")
         # TODO The way to implement this is to ask the inner matrix to
         #      a block_view and then wrap that in an AdcMatrixProjected.
 
@@ -800,8 +823,7 @@ def _select_within_cutoff_via_search(tensor, cutoff):
     return [(tuple(idx), val) for idx, val in res if abs(val) <= cutoff]
 
 
-def _select_within_cutoff_via_energies(tensor, reference_state, axis_spaces,
-                                       omega_screen, cutoff):
+def _select_within_cutoff_via_energies(tensor, reference_state, axis_spaces, omega_screen, cutoff):
     """
     Fast path for `_select_within_cutoff`: the bare diagonal is a sum of
     orbital energies (e.g. `D0_ijab = eps_a + eps_b - eps_i - eps_j`), so
@@ -828,12 +850,8 @@ def _select_within_cutoff_via_energies(tensor, reference_state, axis_spaces,
     if eps_o.size == 0 or eps_v.size == 0:
         return []
 
-    occ_idx = np.array(list(
-        itertools.combinations_with_replacement(range(eps_o.size), r_occ)
-    ))
-    virt_idx = np.array(list(
-        itertools.combinations_with_replacement(range(eps_v.size), r_virt)
-    ))
+    occ_idx = np.array(list(itertools.combinations_with_replacement(range(eps_o.size), r_occ)))
+    virt_idx = np.array(list(itertools.combinations_with_replacement(range(eps_v.size), r_virt)))
     occ_sums = eps_o[occ_idx].sum(axis=1)
     virt_sums = eps_v[virt_idx].sum(axis=1)
     order = np.argsort(virt_sums)
@@ -856,8 +874,7 @@ def _select_within_cutoff_via_energies(tensor, reference_state, axis_spaces,
     return selection
 
 
-def _select_within_cutoff(template, omega_screen, cutoff,
-                          reference_state=None, axis_spaces=None):
+def _select_within_cutoff(template, omega_screen, cutoff, reference_state=None, axis_spaces=None):
     """
     Return `(index_tuple, value)` for every canonical element of the
     unshifted diagonal `template` with `|value - omega_screen| <= cutoff`,
@@ -875,8 +892,7 @@ def _select_within_cutoff(template, omega_screen, cutoff,
             return fast
     shifted = evaluate(template - omega_screen)
     # shift back, so both backends return raw D0 values
-    return [(idx, v + omega_screen)
-           for idx, v in _select_within_cutoff_via_search(shifted, cutoff)]
+    return [(idx, v + omega_screen) for idx, v in _select_within_cutoff_via_search(shifted, cutoff)]
 
 
 def _mask_from_selection(template, selection):
@@ -958,9 +974,15 @@ class RelinearizedAdcMatrix(AdcMatrix):
     _DEFAULT_EXPLICIT_WIDTH = 1.0
     _DEFAULT_ORDER1_WIDTH = 4.0
 
-    def __init__(self, matrix, omega_guess, explicit_width=None,
-                order1_width=None, complementary_space=None,
-                include_coupling=True):
+    def __init__(
+        self,
+        matrix,
+        omega_guess,
+        explicit_width=None,
+        order1_width=None,
+        complementary_space=None,
+        include_coupling=True,
+    ):
         # The blocks are rebuilt from the method, which would silently drop
         # anything else the input matrix carries.
         if type(matrix) is not AdcMatrix or matrix.extra_terms:
@@ -969,18 +991,24 @@ class RelinearizedAdcMatrix(AdcMatrix):
                 "AdcMatrix without extra terms. Add extra terms to the "
                 "RelinearizedAdcMatrix afterwards via +=."
             )
-        super().__init__(matrix.method, matrix.ground_state,
-                         block_orders=matrix.block_orders,
-                         intermediates=matrix.intermediates)
+        super().__init__(
+            matrix.method,
+            matrix.ground_state,
+            block_orders=matrix.block_orders,
+            intermediates=matrix.intermediates,
+        )
 
         if complementary_space is None:
             complementary_space = self.axis_blocks[-1]
         if complementary_space not in self.axis_blocks:
-            raise ValueError(f"Invalid complementary_space {complementary_space}: "
-                             f"not one of {self.axis_blocks}.")
+            raise ValueError(
+                f"Invalid complementary_space {complementary_space}: not one of {self.axis_blocks}."
+            )
         if len(self.axis_blocks) < 2:
-            raise ValueError("RelinearizedAdcMatrix needs at least one "
-                             "excitation space besides the complementary one.")
+            raise ValueError(
+                "RelinearizedAdcMatrix needs at least one "
+                "excitation space besides the complementary one."
+            )
         self.complementary_space = complementary_space
         self.include_coupling = include_coupling
 
@@ -996,18 +1024,20 @@ class RelinearizedAdcMatrix(AdcMatrix):
         space_space = f"{complementary_space}_{complementary_space}"
         order_used = self.block_orders.get(space_space, None)
         if order_used is None:
-            raise ValueError(f"The {space_space} block is not part of this "
-                             "ADC matrix.")
+            raise ValueError(f"The {space_space} block is not part of this ADC matrix.")
 
         # Independent of omega_guess, so not redone by update_omega_guess
         variant = "cvs" if self.is_core_valence_separated else None
         diagonal_0_block = ppmatrix.block(
-            self.ground_state, [complementary_space, complementary_space],
-            order=0, intermediates=self.intermediates, variant=variant
+            self.ground_state,
+            [complementary_space, complementary_space],
+            order=0,
+            intermediates=self.intermediates,
+            variant=variant,
         )
         self.diagonal_0 = diagonal_0_block.diagonal
 
-        self.is_trivial = (order_used == 0)
+        self.is_trivial = order_used == 0
         # order1_width only matters if there is a 1st order tier (V != 0)
         if not self.is_trivial and not 0 < order1_width < np.inf:
             raise ValueError("Need a finite order1_width > 0.")
@@ -1022,8 +1052,9 @@ class RelinearizedAdcMatrix(AdcMatrix):
             )
         if self.is_trivial:
             self._v_apply = None
-        elif (complementary_space == "pphh" and order_used == 1
-             and not self.is_core_valence_separated):
+        elif (
+            complementary_space == "pphh" and order_used == 1 and not self.is_core_valence_separated
+        ):
             v_block = ppmatrix.block_pphh_pphh_1_v(
                 self.reference_state, self.ground_state, self.intermediates
             )
@@ -1036,6 +1067,7 @@ class RelinearizedAdcMatrix(AdcMatrix):
 
             def v_apply(ampl):
                 return evaluate(order_n_apply(ampl) - order_0_apply(ampl))
+
             self._v_apply = v_apply
 
         self.update_omega_guess(omega_guess)
@@ -1066,20 +1098,24 @@ class RelinearizedAdcMatrix(AdcMatrix):
         explicit_top = self.omega_screen + self.explicit_width
         if self.is_trivial:
             active_sel = _select_within_cutoff(
-                template, explicit_top / 2, explicit_top / 2,
-                reference_state=self.reference_state, axis_spaces=axis_spaces
+                template,
+                explicit_top / 2,
+                explicit_top / 2,
+                reference_state=self.reference_state,
+                axis_spaces=axis_spaces,
             )
             order1_sel = []
         else:
             order1_top = explicit_top + self.order1_width
             within_order1_cutoff = _select_within_cutoff(
-                template, order1_top / 2, order1_top / 2,
-                reference_state=self.reference_state, axis_spaces=axis_spaces
+                template,
+                order1_top / 2,
+                order1_top / 2,
+                reference_state=self.reference_state,
+                axis_spaces=axis_spaces,
             )
-            active_sel = [(idx, v) for idx, v in within_order1_cutoff
-                          if v <= explicit_top]
-            order1_sel = [(idx, v) for idx, v in within_order1_cutoff
-                          if v > explicit_top]
+            active_sel = [(idx, v) for idx, v in within_order1_cutoff if v <= explicit_top]
+            order1_sel = [(idx, v) for idx, v in within_order1_cutoff if v > explicit_top]
 
         active_tensor = _mask_from_selection(template, active_sel)
         self._mask_active_tensor = active_tensor
@@ -1095,20 +1131,17 @@ class RelinearizedAdcMatrix(AdcMatrix):
         elimination_windows.append((order0_tensor, 0))
 
         n_total = template.size
-        n_explicit = int(round(float(active_tensor.dot(active_tensor))))
+        n_explicit = round(float(active_tensor.dot(active_tensor)))
         self.window_occupancy = {
             "total": n_total,
             "explicit": {"count": n_explicit, "fraction": n_explicit / n_total},
         }
         for mask, order in elimination_windows:
-            n = int(round(float(mask.dot(mask))))
-            self.window_occupancy[f"order-{order}"] = {
-                "count": n, "fraction": n / n_total
-            }
+            n = round(float(mask.dot(mask)))
+            self.window_occupancy[f"order-{order}"] = {"count": n, "fraction": n / n_total}
 
         self.inverter = ComplementaryBlockInverter(
-            self.complementary_space, self.diagonal_0, self._v_apply,
-            elimination_windows
+            self.complementary_space, self.diagonal_0, self._v_apply, elimination_windows
         )
         self._lowest_eliminated_d0 = self._find_lowest_eliminated_d0()
 
@@ -1118,18 +1151,23 @@ class RelinearizedAdcMatrix(AdcMatrix):
         by searching windows of growing width above the explicit window,
         which contains every lower configuration."""
         occupancy = self.window_occupancy
-        if all(w["count"] == 0 for name, w in occupancy.items()
-               if name.startswith("order-")):
+        if all(w["count"] == 0 for name, w in occupancy.items() if name.startswith("order-")):
             return np.inf
         space = self.complementary_space
         explicit_top = self.omega_screen + self.explicit_width
         width = 0.1
         while width < 1e4:
-            found = [v for _, v in _select_within_cutoff(
-                getattr(self.diagonal_0, space), explicit_top + width / 2,
-                width / 2, reference_state=self.reference_state,
-                axis_spaces=self.axis_spaces[space]
-            ) if v > explicit_top]
+            found = [
+                v
+                for _, v in _select_within_cutoff(
+                    getattr(self.diagonal_0, space),
+                    explicit_top + width / 2,
+                    width / 2,
+                    reference_state=self.reference_state,
+                    axis_spaces=self.axis_spaces[space],
+                )
+                if v > explicit_top
+            ]
             if found:
                 return min(found)
             width *= 2
@@ -1161,8 +1199,9 @@ class RelinearizedAdcMatrix(AdcMatrix):
         # dropping the relinearization.
         if not isinstance(other, AdcExtraTerm):
             return NotImplemented
-        raise NotImplementedError("Adding to a RelinearizedAdcMatrix is only "
-                                  "supported in place, via +=.")
+        raise NotImplementedError(
+            "Adding to a RelinearizedAdcMatrix is only supported in place, via +=."
+        )
 
     @property
     def _eliminated_self_coupling(self):
@@ -1188,18 +1227,14 @@ class RelinearizedAdcMatrix(AdcMatrix):
 
         v_active = self._active_masked(v)
         external = self._external_coupling(v_active)
-        self_coupling = evaluate(
-            getattr(self.blocks[space_space](v_active), space)
-        )
-        x_q = self._coupling_into_eliminated(v_active, external,
-                                             self_coupling)
+        self_coupling = evaluate(getattr(self.blocks[space_space](v_active), space))
+        x_q = self._coupling_into_eliminated(v_active, external, self_coupling)
         x_q = self.inverter.apply(x_q, self.omega_fixed)
 
         # The blocks into the other spaces act on the explicit and the
         # eliminated part at once, so each is applied only once.
         v_full = v_active.copy()
-        v_full[space] = evaluate(getattr(v_active, space)
-                                 + getattr(x_q, space))
+        v_full[space] = evaluate(getattr(v_active, space) + getattr(x_q, space))
         result = v_active.zeros_like()
         for name, block_fn in self.blocks.items():
             if name.split("_")[0] != space:
@@ -1208,8 +1243,7 @@ class RelinearizedAdcMatrix(AdcMatrix):
         # Only the explicit configurations are unknowns
         space_result = external + self_coupling
         if self._eliminated_self_coupling:
-            space_result = (space_result
-                            + getattr(self.blocks[space_space](x_q), space))
+            space_result = space_result + getattr(self.blocks[space_space](x_q), space)
         result[space] = evaluate(self._mask_active_tensor * space_result)
         return result
 
@@ -1248,14 +1282,12 @@ class RelinearizedAdcMatrix(AdcMatrix):
         """
         x_p = self._active_masked(ampl)
         b = self._coupling_into_eliminated(x_p)
-        energy, x_q, n_steps = self._self_consistent_energy(x_p, b, omega,
-                                                            output=output)
+        energy, x_q, n_steps = self._self_consistent_energy(x_p, b, omega, output=output)
         if x_q is None:
             return omega, ampl, 0
         return energy, self._unfold(x_p, x_q), n_steps
 
-    def _coupling_into_eliminated(self, v_active, external=None,
-                                  self_coupling=None):
+    def _coupling_into_eliminated(self, v_active, external=None, self_coupling=None):
         """
         The numerator `b = M_QP x_P` driving the eliminated configurations,
         for the already active-masked `v_active`: the blocks coupling the
@@ -1270,16 +1302,13 @@ class RelinearizedAdcMatrix(AdcMatrix):
         coupling = external
         if self._eliminated_self_coupling:
             if self_coupling is None:
-                self_coupling = getattr(
-                    self.blocks[f"{space}_{space}"](v_active), space
-                )
+                self_coupling = getattr(self.blocks[f"{space}_{space}"](v_active), space)
             coupling = coupling + self_coupling
-        return AmplitudeVector(**{
-            space: evaluate(self._mask_inactive_tensor * coupling)
-        })
+        return AmplitudeVector(**{space: evaluate(self._mask_inactive_tensor * coupling)})
 
-    def _self_consistent_energy(self, v_active, numerator, omega, tol=1e-6,
-                                maxiter=50, output=None):
+    def _self_consistent_energy(
+        self, v_active, numerator, omega, tol=1e-6, maxiter=50, output=None
+    ):
         """
         Self-consistent energy of the converged relinearized eigenpair
         `(v_active, omega)`: the root of
@@ -1337,11 +1366,13 @@ class RelinearizedAdcMatrix(AdcMatrix):
         """
         pole = self._lowest_eliminated_d0
         if not omega < pole:  # also catches a NaN omega
-            warnings.warn(f"Relinearized eigenvalue {omega:.6f} lies at or "
-                          f"above the lowest eliminated configuration "
-                          f"(D = {pole:.6f}), so the state is not described "
-                          f"by the fold and is kept unchanged. Increase "
-                          f"explicit_width or the omega guesses.")
+            warnings.warn(
+                f"Relinearized eigenvalue {omega:.6f} lies at or "
+                f"above the lowest eliminated configuration "
+                f"(D = {pole:.6f}), so the state is not described "
+                f"by the fold and is kept unchanged. Increase "
+                f"explicit_width or the omega guesses."
+            )
             return omega, None, 0
 
         omega_fixed = self.omega_fixed
@@ -1353,8 +1384,7 @@ class RelinearizedAdcMatrix(AdcMatrix):
         if w >= pole:
             w = 0.5 * (omega + pole)
         if output is not None:
-            print(f"    1st order   omega = {w:.10f}   "
-                  f"change = {w - omega:+.4e}", file=output)
+            print(f"    1st order   omega = {w:.10f}   change = {w - omega:+.4e}", file=output)
 
         lower, upper = -np.inf, pole  # bracket of the root
         for n_steps in range(1, maxiter + 1):
@@ -1373,21 +1403,27 @@ class RelinearizedAdcMatrix(AdcMatrix):
                     bisected = True
             step, w = w - w_new, w_new
             if output is not None:
-                print(f"    Newton {n_steps:3d}  omega = {w:.10f}   "
-                      f"change = {-step:+.4e}"
-                      + ("   (bisection)" if bisected else ""), file=output)
+                print(
+                    f"    Newton {n_steps:3d}  omega = {w:.10f}   "
+                    f"change = {-step:+.4e}" + ("   (bisection)" if bisected else ""),
+                    file=output,
+                )
             if abs(step) < tol:
                 break
         else:
-            warnings.warn(f"Self-consistent energy not converged within "
-                          f"{maxiter} Newton steps (last step {step:.2e}).")
+            warnings.warn(
+                f"Self-consistent energy not converged within "
+                f"{maxiter} Newton steps (last step {step:.2e})."
+            )
 
         if pole - w < tol:
-            warnings.warn(f"Self-consistent energy of the relinearized "
-                          f"eigenvalue {omega:.6f} ends at the lowest "
-                          f"eliminated configuration (D = {pole:.6f}), so the "
-                          f"state is kept unchanged. Increase explicit_width "
-                          f"or the omega guesses.")
+            warnings.warn(
+                f"Self-consistent energy of the relinearized "
+                f"eigenvalue {omega:.6f} ends at the lowest "
+                f"eliminated configuration (D = {pole:.6f}), so the "
+                f"state is kept unchanged. Increase explicit_width "
+                f"or the omega guesses."
+            )
             return omega, None, 0
         return w, x_q, n_steps
 
@@ -1408,10 +1444,10 @@ class RelinearizedAdcMatrix(AdcMatrix):
         out = super().diagonal()
         space = self.complementary_space
         tensor = getattr(out, space)
-        new_tensor = evaluate(
-            tensor * self._mask_active_tensor + 1e5 * self._mask_inactive_tensor
+        new_tensor = evaluate(tensor * self._mask_active_tensor + 1e5 * self._mask_inactive_tensor)
+        return AmplitudeVector(
+            **{
+                **{b: t for b, t in out.items() if b != space},
+                space: new_tensor,
+            }
         )
-        return AmplitudeVector(**{
-            **{b: t for b, t in out.items() if b != space},
-            space: new_tensor,
-        })
