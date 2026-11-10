@@ -933,7 +933,8 @@ class RelinearizedAdcMatrix(AdcMatrix):
     ----------
     matrix : AdcMatrix
         The full ADC matrix to relinearize: a plain `AdcMatrix` without
-        extra terms (add those to the relinearized matrix via `+=`).
+        extra terms (add those to the relinearized matrix via `+=`; terms
+        on the complementary block itself are not supported).
     omega_guess : float or Sequence[float]
         Approximate energy/energies of the targeted state(s). The fold is
         evaluated at their mean (`omega_fixed`), the explicit window is
@@ -1140,6 +1141,17 @@ class RelinearizedAdcMatrix(AdcMatrix):
         active_tensor = getattr(v_active, space)
         v_active[space] = evaluate(active_tensor * self._mask_active_tensor)
         return v_active
+
+    def __iadd__(self, other):
+        # The fold only uses the bare diagonal D0 of the complementary
+        # block, so a term on that block would be ignored there.
+        space_space = f"{self.complementary_space}_{self.complementary_space}"
+        if isinstance(other, AdcExtraTerm) and space_space in other.blocks:
+            raise NotImplementedError(
+                f"Extra terms on the {space_space} block are not supported "
+                "by RelinearizedAdcMatrix."
+            )
+        return super().__iadd__(other)
 
     def __add__(self, other):
         # AdcMatrix.__add__ would return a plain AdcMatrix, silently

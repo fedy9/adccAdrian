@@ -256,6 +256,13 @@ def test_extra_terms():
     with pytest.raises(NotImplementedError):
         term + rel
 
+    # A term on the complementary block would be ignored by the fold.
+    def shift_pphh(hf, mp, intermediates):
+        return AdcBlock(lambda v: adcc.AmplitudeVector(pphh=0.1 * v.pphh),
+                        adcc.AmplitudeVector(pphh=0.1 * ones.pphh))
+    with pytest.raises(NotImplementedError):
+        rel += AdcExtraTerm(matrix, {"pphh_pphh": shift_pphh})
+
     # In place (as run_adc adds environment terms) the term is applied.
     exact = adcc.run_adc(matrix + term, n_singlets=2, conv_tol=1e-8,
                          output=None)
