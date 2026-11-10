@@ -506,6 +506,7 @@ def diagonalise_adcmatrix(matrix, n_states, kind, eigensolver="davidson",
 
     # Obtain or check guesses
     if guesses is None:
+        explicit_count = n_guesses is not None or n_guesses_doubles is not None
         if n_guesses is None:
             # restrict to the number of available singles guesses if no doubles
             # are available
@@ -521,6 +522,10 @@ def diagonalise_adcmatrix(matrix, n_states, kind, eigensolver="davidson",
         guesses = obtain_guesses_by_inspection(matrix, n_guesses, kind,
                                                n_guesses_doubles,
                                                min_guesses=min_guesses)
+        if explicit_count and len(guesses) < n_guesses:
+            warnings.warn(f"Only {len(guesses)} guesses available in the "
+                          f"explicit space of the relinearized matrix "
+                          f"({n_guesses} requested); using {len(guesses)}.")
     else:
         if len(guesses) < n_states:
             raise InputError("Less guesses provided via guesses (== {}) "

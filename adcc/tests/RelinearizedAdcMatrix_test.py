@@ -238,6 +238,15 @@ def test_ignored_parameters_warn():
     RelinearizedAdcMatrix(matrix, 0.5, order1_width=0.0)
 
 
+def test_explicit_guess_count_reduced_with_warning():
+    # Water/STO-3G has 10 singlet singles and, with the default window, no
+    # explicit doubles to offer as guesses.
+    matrix = adc2_matrix("h2o_sto3g")
+    with pytest.warns(UserWarning, match="Only 10 guesses available"):
+        adcc.run_adc(matrix, n_singlets=3, n_guesses=12, relin=True,
+                     output=None)
+
+
 def test_extra_terms():
     matrix = adc2_matrix("h2o_sto3g")
     ones = matrix.diagonal().ones_like()
