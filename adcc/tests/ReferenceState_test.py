@@ -204,4 +204,8 @@ def test_ssq_reference_state(system):
             scfres, core_orbitals=core_orbitals, frozen_core=frozen_core,
             frozen_virtual=frozen_virtual
         )
-        assert hf.ssq == pytest.approx(ref_ssq)
+        if "cvs" in case:
+            with pytest.raises(NotImplementedError):
+                hf.ssq
+        else:
+            assert hf.ssq == pytest.approx(ref_ssq)

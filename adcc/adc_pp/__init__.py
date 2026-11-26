@@ -22,7 +22,6 @@
 ## ---------------------------------------------------------------------
 from .state_diffdm import state_diffdm
 from .state_diffdm_2p import state_diffdm_2p
-from .state_ssq_cvs import cvs_state_ssq
 from .transition_dm import transition_dm
 from .state2state_transition_dm import state2state_transition_dm
 from .modified_transition_moments import modified_transition_moments
@@ -34,4 +33,4 @@ from the high-level objects in the adcc main module.
 """
 
 __all__ = ["state_diffdm", "state_diffdm_2p", "state2state_transition_dm",
-           "transition_dm", "modified_transition_moments", "cvs_state_ssq"]
+           "transition_dm", "modified_transition_moments"]
