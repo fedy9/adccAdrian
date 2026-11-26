@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 ## vi: tabstop=4 shiftwidth=4 softtabstop=4 expandtab
 ## ---------------------------------------------------------------------
 ##
@@ -22,9 +21,8 @@
 ## ---------------------------------------------------------------------
 from collections import Counter
 from dataclasses import dataclass
-from typing import Any, Optional, Union, TypeVar
 from enum import Enum
-
+from typing import ClassVar, TypeVar
 
 T = TypeVar("T", bound="Method")
 
@@ -39,10 +37,11 @@ class MethodLevel(Enum):
     FIVE = 5
 
     # special levels
-    TWO_X = "2x"    # extended 2nd-order ADC: 2p2h-2p2h in 1st order
-    TWO_X_DIA = "2xD" # diagonal approx. of ADC(3)'s pphh-pphh block
-    THREE_DIA = "3D" # diagonal approx. of ADC(2)-x's pphh-pphh block
-    # spin-pure approx.: keep all couplings within each spatial quadruple ijab
+    TWO_X = "2x"  # extended 2nd-order ADC: 2p2h-2p2h in 1st order
+    TWO_X_DIA = "2xD"  # ADC(2)-x with diagonal approx. of the pphh-pphh block
+    THREE_DIA = "3D"  # ADC(3) with diagonal approx. of the pphh-pphh block
+    # spin-pure approx. of the pphh-pphh block: keep all couplings within each
+    # set of (degenerate) orbital shells
     TWO_X_QUAD = "2xQ"
     THREE_QUAD = "3Q"
     # 1st-order ISR: in singles excitation space only (starting from 1-particle
@@ -70,7 +69,7 @@ class MethodLevel(Enum):
         elif isinstance(self.value, str):
             return int(self.value[0])
         else:
-            raise ValueError(f"Unknown value type {type(self.value)}.")
+            raise TypeError(f"Unknown value type {type(self.value)}.")
 
 
 class AdcType(Enum):
@@ -105,8 +104,8 @@ class GroundStateType(Enum):
 
 @dataclass(frozen=True)
 class LevelSpec:
-    max_level: Optional[int] = None
-    special_levels: tuple[MethodLevel, ...] = tuple()
+    max_level: int | None = None
+    special_levels: tuple[MethodLevel, ...] = ()
 
     def supports(self, level: MethodLevel) -> bool:
         if isinstance(level.value, int):
@@ -123,8 +122,8 @@ class LevelKey:
 
 class Method:
     # this has to be set on the child classes
-    _method_base_name: Optional[str] = None
-    _supported_levels: dict[LevelKey, LevelSpec] = {}
+    _method_base_name: str | None = None
+    _supported_levels: ClassVar[dict[LevelKey, LevelSpec]] = {}
 
     def __init__(self, method: str):
         """
@@ -142,7 +141,7 @@ class Method:
             raise ValueError(f"{split[-1]} is not a valid method type")
 
         # validate method level
-        level = split[-1][len(self._method_base_name):]
+        level = split[-1][len(self._method_base_name) :]
         if level.isnumeric():
             self.level: MethodLevel = MethodLevel(int(level))
         else:
@@ -166,11 +165,13 @@ class Method:
         # validate prefixes
         valid_prefixes: tuple[str, ...] = ("cvs", "mp")
         if any(pref not in valid_prefixes for pref in split):
-            raise ValueError(f"Invalid method prefix in {split}. Valid prefixes "
-                             f"are {valid_prefixes}.")
+            raise ValueError(
+                f"Invalid method prefix in {split}. Valid prefixes are {valid_prefixes}."
+            )
         if any(count != 1 for count in Counter(split).values()):
-            raise ValueError(f"Invalid method string {method}. Duplicate "
-                             f"prefix detected in {split}.")
+            raise ValueError(
+                f"Invalid method string {method}. Duplicate prefix detected in {split}."
+            )
         # set and remove cvs
         self.is_core_valence_separated: bool = "cvs" in split
         if self.is_core_valence_separated:
@@ -184,20 +185,21 @@ class Method:
                 break
         # The remaining prefixes can not be a ground state type anymore
         if any(GroundStateType.is_valid_gs_type(pref) for pref in split):
-            raise ValueError(f"Invalid method string {method}. Ground state "
-                             "type (e.g. 'mp') provided twice.")
+            raise ValueError(
+                f"Invalid method string {method}. Ground state type (e.g. 'mp') provided twice."
+            )
         # at this point all prefixes should have been handled and removed
         if split:
-            raise ValueError(f"Invalid method prefixes detected: {split}."
-                             f"Parsed from method string '{method}'.")
+            raise ValueError(
+                f"Invalid method prefixes detected: {split}.Parsed from method string '{method}'."
+            )
         # ensure that the level is valid for the given method
         # this also depends on the adc type, gs_type and possibly other prefixes
         self._validate_level(self.level)
 
     def _validate_level(self, level: MethodLevel) -> None:
         key = LevelKey(
-            adc_type=self.adc_type, gs_type=self.gs_type,
-            cvs=self.is_core_valence_separated
+            adc_type=self.adc_type, gs_type=self.gs_type, cvs=self.is_core_valence_separated
         )
         spec = self._supported_levels.get(key, None)
         if spec is not None and spec.supports(level):
@@ -218,10 +220,7 @@ class Method:
         if self.adc_type is AdcType.PP:
             return f"{self._method_base_name}{self.level.to_str()}"
         else:
-            return (
-                f"{self.adc_type.to_str()}-"
-                f"{self._method_base_name}{self.level.to_str()}"
-            )
+            return f"{self.adc_type.to_str()}-{self._method_base_name}{self.level.to_str()}"
 
     @property
     def prefixes(self) -> str:
@@ -234,21 +233,20 @@ class Method:
         return "-".join(ret)
 
     @property
-    def base_method(self: T) -> T:
+    def base_method(self: T) -> T:  # noqa: PYI019  switch to Self once we drop 3.10
         """
         The base (full) method, i.e. with all approximations such as
         CVS stripped off.
         """
         return self.__class__(self._base_method)
 
-    def at_level(self: T, newlevel: Union[int, str]) -> T:
+    # switch to Self once we drop 3.10
+    def at_level(self: T, newlevel: int | str) -> T:  # noqa:PYI019
         """
         Return an equivalent method, where only the level is changed
         (e.g. calling this on a CVS method returns a CVS method)
         """
-        return self.__class__(self.name.replace(
-            self.level.to_str(), str(newlevel)
-        ))
+        return self.__class__(self.name.replace(self.level.to_str(), str(newlevel)))
 
     def as_method(self, method_cls: type[T]) -> T:
         """
@@ -257,29 +255,28 @@ class Method:
         """
         assert self._method_base_name is not None
         assert method_cls._method_base_name is not None
-        return method_cls(
-            self.name.replace(self._method_base_name, method_cls._method_base_name)
-        )
+        return method_cls(self.name.replace(self._method_base_name, method_cls._method_base_name))
 
-    def as_method_at_level(self, method_cls: type[T],
-                           newlevel: Union[int, str]) -> T:
+    def as_method_at_level(self, method_cls: type[T], newlevel: int | str) -> T:
         """
         Return an equivalent method, at the given level, preserving any prefices
         (e.g. cvs-) of this method.
         """
         assert self._method_base_name is not None
         assert method_cls._method_base_name is not None
-        return method_cls(self.name.replace(
-            f"{self._method_base_name}{self.level.to_str()}",
-            f"{method_cls._method_base_name}{newlevel}"
-        ))
+        return method_cls(
+            self.name.replace(
+                f"{self._method_base_name}{self.level.to_str()}",
+                f"{method_cls._method_base_name}{newlevel}",
+            )
+        )
 
-    def __eq__(self, other: Any) -> bool:
+    def __eq__(self, other: object) -> bool:
         if not isinstance(other, Method):
             return NotImplemented
         return self.name == other.name
 
-    def __ne__(self, other: Any):
+    def __ne__(self, other: object):
         if not isinstance(other, Method):
             return NotImplemented
         return self.name != other.name
@@ -290,48 +287,37 @@ class Method:
 
 class AdcMethod(Method):
     _method_base_name = "adc"
-    _supported_levels = {
-        LevelKey(
-            adc_type=AdcType.PP,
-            gs_type=GroundStateType.MP,
-            cvs=False
-        ): LevelSpec(
+    _supported_levels: ClassVar = {
+        LevelKey(adc_type=AdcType.PP, gs_type=GroundStateType.MP, cvs=False): LevelSpec(
             max_level=4,
-            special_levels=(MethodLevel.TWO_X, MethodLevel.TWO_X_DIA,
-                           MethodLevel.THREE_DIA, MethodLevel.TWO_X_QUAD,
-                           MethodLevel.THREE_QUAD)
+            special_levels=(
+                MethodLevel.TWO_X,
+                MethodLevel.TWO_X_DIA,
+                MethodLevel.THREE_DIA,
+                MethodLevel.TWO_X_QUAD,
+                MethodLevel.THREE_QUAD,
+            ),
         ),
-        LevelKey(
-            adc_type=AdcType.PP,
-            gs_type=GroundStateType.MP,
-            cvs=True
-        ): LevelSpec(
+        LevelKey(adc_type=AdcType.PP, gs_type=GroundStateType.MP, cvs=True): LevelSpec(
             max_level=3,
-            special_levels=(MethodLevel.TWO_X, MethodLevel.TWO_X_DIA,
-                           MethodLevel.THREE_DIA, MethodLevel.TWO_X_QUAD,
-                           MethodLevel.THREE_QUAD)
-        )
+            special_levels=(
+                MethodLevel.TWO_X,
+                MethodLevel.TWO_X_DIA,
+                MethodLevel.THREE_DIA,
+                MethodLevel.TWO_X_QUAD,
+                MethodLevel.THREE_QUAD,
+            ),
+        ),
     }
 
 
 class IsrMethod(Method):
     _method_base_name = "isr"
-    _supported_levels = {
-        LevelKey(
-            adc_type=AdcType.PP,
-            gs_type=GroundStateType.MP,
-            cvs=False
-        ): LevelSpec(
-            max_level=3,
-            special_levels=(MethodLevel.ONE_S, MethodLevel.TWO_D,
-                            MethodLevel.THREE_D)
+    _supported_levels: ClassVar = {
+        LevelKey(adc_type=AdcType.PP, gs_type=GroundStateType.MP, cvs=False): LevelSpec(
+            max_level=3, special_levels=(MethodLevel.ONE_S, MethodLevel.TWO_D, MethodLevel.THREE_D)
         ),
-        LevelKey(
-            adc_type=AdcType.PP,
-            gs_type=GroundStateType.MP,
-            cvs=True
-        ): LevelSpec(
-            max_level=2,
-            special_levels=(MethodLevel.ONE_S, MethodLevel.TWO_D)
-        )
+        LevelKey(adc_type=AdcType.PP, gs_type=GroundStateType.MP, cvs=True): LevelSpec(
+            max_level=2, special_levels=(MethodLevel.ONE_S, MethodLevel.TWO_D)
+        ),
     }
