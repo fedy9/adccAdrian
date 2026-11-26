@@ -87,7 +87,8 @@ class ElectronicStates:
             property_method = data._property_method
         if property_method is None:
             if self.method.level in [MethodLevel.TWO_X, MethodLevel.TWO_X_DIA,
-                                     MethodLevel.THREE, MethodLevel.THREE_DIA,
+                                     MethodLevel.TWO_X_QUAD, MethodLevel.THREE,
+                                     MethodLevel.THREE_DIA, MethodLevel.THREE_QUAD,
                                      MethodLevel.FOUR]:
                 # Auto-select ISR(2) properties for ADC(2)-x, ADC(2)-xD,
                 # ADC(3), ADC(3)-D, and ADC(4) calc

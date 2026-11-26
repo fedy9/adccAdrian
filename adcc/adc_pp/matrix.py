@@ -23,10 +23,13 @@
 from math import sqrt
 from collections import namedtuple
 
+import numpy as np
+
 from adcc import block as b
 from adcc.functions import direct_sum, einsum, zeros_like
 from adcc.Intermediates import Intermediates, register_as_intermediate
 from adcc.AmplitudeVector import AmplitudeVector
+from adcc.Tensor import Tensor
 
 __all__ = ["block"]
 
@@ -231,29 +234,22 @@ def diagonal_pphh_pphh_1(hf):
     ))
 
 
-def block_pphh_pphh_1(hf, mp, intermediates):
+def _apply_pphh_pphh_1(hf, oooo, ovov, vvvv):
     def apply(ampl):
         return AmplitudeVector(pphh=(  # 0th order
             + 2 * einsum("ijac,bc->ijab", ampl.pphh, hf.fvv).antisymmetrise(2, 3)
             - 2 * einsum("ik,kjab->ijab", hf.foo, ampl.pphh).antisymmetrise(0, 1)
             # 1st order
             + (
-                -4 * einsum("ikac,kbjc->ijab", ampl.pphh, hf.ovov)
+                -4 * einsum("ikac,kbjc->ijab", ampl.pphh, ovov)
             ).antisymmetrise(0, 1).antisymmetrise(2, 3)
-            + 0.5 * einsum("ijkl,klab->ijab", hf.oooo, ampl.pphh)
-            + 0.5 * einsum("ijcd,abcd->ijab", ampl.pphh, hf.vvvv)
+            + 0.5 * einsum("ijkl,klab->ijab", oooo, ampl.pphh)
+            + 0.5 * einsum("ijcd,abcd->ijab", ampl.pphh, vvvv)
         ))
-    return AdcBlock(apply, diagonal_pphh_pphh_1(hf))
+    return apply
 
 
-def block_pphh_pphh_1d(hf, mp, intermediates):
-    d2 = diagonal_pphh_pphh_1(hf)
-    def apply(ampl):
-        return AmplitudeVector(pphh=ampl.pphh * d2.pphh)
-    return AdcBlock(apply, d2)
-
-
-def block_cvs_pphh_pphh_1(hf, mp, intermediates):
+def _apply_cvs_pphh_pphh_1(hf, ococ, ovov, cvcv, vvvv):
     def apply(ampl):
         return AmplitudeVector(pphh=(
             # 0th order
@@ -262,20 +258,143 @@ def block_cvs_pphh_pphh_1(hf, mp, intermediates):
             - 1.0 * einsum("JK,iKab->iJab", hf.fcc, ampl.pphh)
             # 1st order
             + (
-                - 2.0 * einsum("iKac,KbJc->iJab", ampl.pphh, hf.cvcv)
-                + 2.0 * einsum("icka,kJbc->iJab", hf.ovov, ampl.pphh)
+                - 2.0 * einsum("iKac,KbJc->iJab", ampl.pphh, cvcv)
+                + 2.0 * einsum("icka,kJbc->iJab", ovov, ampl.pphh)
             ).antisymmetrise(2, 3)
-            + 1.0 * einsum("iJlK,lKab->iJab", hf.ococ, ampl.pphh)
-            + 0.5 * einsum("iJcd,abcd->iJab", ampl.pphh, hf.vvvv)
+            + 1.0 * einsum("iJlK,lKab->iJab", ococ, ampl.pphh)
+            + 0.5 * einsum("iJcd,abcd->iJab", ampl.pphh, vvvv)
         ))
+    return apply
+
+
+def block_pphh_pphh_1(hf, mp, intermediates):
+    apply = _apply_pphh_pphh_1(hf, hf.oooo, hf.ovov, hf.vvvv)
+    return AdcBlock(apply, diagonal_pphh_pphh_1(hf))
+
+
+def block_pphh_pphh_1d(hf, mp, intermediates):
+    d2 = diagonal_pphh_pphh_1(hf)
+    d2.evaluate()  # no lazy reference to vvvv (allows dropping it, see run_adc)
+    def apply(ampl):
+        return AmplitudeVector(pphh=ampl.pphh * d2.pphh)
+    return AdcBlock(apply, d2)
+
+
+def block_cvs_pphh_pphh_1(hf, mp, intermediates):
+    apply = _apply_cvs_pphh_pphh_1(hf, hf.ococ, hf.ovov, hf.cvcv, hf.vvvv)
     return AdcBlock(apply, diagonal_pphh_pphh_1(hf))
 
 
 def block_cvs_pphh_pphh_1d(hf, mp, intermediates):
     d2 = diagonal_pphh_pphh_1(hf)
+    d2.evaluate()  # no lazy reference to vvvv (allows dropping it, see run_adc)
     def apply(ampl):
         return AmplitudeVector(pphh=ampl.pphh * d2.pphh)
     return AdcBlock(apply, d2)
+
+
+#
+# Spin-pure block approximation of the 1st order pphh_pphh block (order "1q")
+#
+# The diagonal approximation (1d) is not spin pure: for four distinct spatial
+# orbitals i, j, a, b there are six Ms = 0 doubles determinants (2 singlets,
+# 3 triplets, 1 quintet), which S^2 mixes but which have different diagonal
+# elements. Keeping all couplings of M^(1) between doubles whose spatial
+# orbitals belong to the same set of (degenerate) shells {I, J, A, B}, i.e.
+# sum_Q P_Q M^(1) P_Q, commutes with S^2, since the spin operators do not change
+# spatial occupations. Using degenerate shells instead of individual orbitals
+# additionally makes the approximation invariant under rotations among
+# degenerate orbitals, such that degenerate states stay degenerate.
+# Without degeneracies the only couplings beyond the diagonal are spin flips of
+# index pairs, weighted by spatial exchange integrals K_pq = (pq|qp).
+#
+# Implementation: the full first-order apply with masked integrals, keeping
+# only the elements which couple doubles within the same shell set. The masks
+# are built from 2-index shell indicator matrices, so libtensor skips all
+# zero tiles and the cost stays O(o^2 v^2) (times the orbital tile size).
+#
+def _shell_indicator(hf, space):
+    """
+    P[p_s, q_t] = 1 if the spatial orbitals of p and q belong to the same
+    degenerate shell (for all spins s, t), else 0. Orbitals are degenerate if
+    their orbital energies differ by less than the SCF convergence tolerance.
+
+    Requires that the k-th alpha and the k-th beta orbital of the space are the
+    same spatial orbital, which is verified via the MO coefficients (alpha and
+    beta orbitals are sorted separately).
+    """
+    n = hf.mospaces.n_orbs(space)
+    n_alpha = hf.mospaces.n_orbs_alpha(space)
+    if 2 * n_alpha != n:
+        raise ValueError(f"Space {space} does not have the same number of alpha "
+                         "and beta orbitals.")
+    c_alpha = hf.orbital_coefficients_alpha(space + "b").to_ndarray()[:n_alpha]
+    c_beta = hf.orbital_coefficients_beta(space + "b").to_ndarray()[n_alpha:]
+    if not np.allclose(c_alpha, c_beta, rtol=0, atol=1e-10):
+        raise ValueError(f"The alpha and beta orbitals of space {space} are not "
+                         "identical in the same order, which is required for "
+                         "the spin-pure block approximation.")
+    # orbitals within a space are sorted by energy: consecutive orbitals with
+    # an energy gap below the threshold form a shell
+    energies = hf.orbital_energies(space).to_ndarray()[:n_alpha]
+    shell = np.concatenate([[0], np.cumsum(np.diff(energies) > hf.conv_tol)])
+    shell = shell[np.arange(n) % n_alpha]
+    indicator = (shell[:, None] == shell[None, :]).astype(float)
+    ret = Tensor(hf.mospaces, space + space, permutations=["ij", "ji"],
+                 spin_block_maps=[("aa", "bb", 1), ("ab", "ba", 1)])
+    ret.set_from_ndarray(indicator, 1e-14)
+    ret.set_immutable()
+    return ret
+
+
+def _pair_mask(P):
+    """M[pqrs] = 1 if {p, q} and {r, s} are in the same shells (as pairs)"""
+    direct = einsum("pr,qs->pqrs", P, P).evaluate()
+    exchange = einsum("ps,qr->pqrs", P, P).evaluate()
+    return (direct + exchange - direct * exchange).evaluate()
+
+
+def _masked(eri, mask):
+    ret = (eri * mask).evaluate()
+    ret.set_immutable()
+    return ret
+
+
+def _check_restricted(hf):
+    if not hf.restricted:
+        # Without a common set of spatial orbitals there is no spin-pure
+        # block structure to restore.
+        raise NotImplementedError("The spin-pure block approximation of the "
+                                  "pphh_pphh block (adc2xQ, adc3Q) is only "
+                                  "implemented for restricted references.")
+
+
+def block_pphh_pphh_1q(hf, mp, intermediates):
+    _check_restricted(hf)
+    P_o, P_v = _shell_indicator(hf, "o1"), _shell_indicator(hf, "v1")
+    # ovov[k, b, j, c]: shell(k) == shell(j) and shell(b) == shell(c)
+    apply = _apply_pphh_pphh_1(
+        hf,
+        oooo=_masked(hf.oooo, _pair_mask(P_o)),
+        ovov=_masked(hf.ovov, einsum("kj,bc->kbjc", P_o, P_v)),
+        vvvv=_masked(hf.vvvv, _pair_mask(P_v)),
+    )
+    return AdcBlock(apply, diagonal_pphh_pphh_1(hf))
+
+
+def block_cvs_pphh_pphh_1q(hf, mp, intermediates):
+    _check_restricted(hf)
+    P_o, P_C = _shell_indicator(hf, "o1"), _shell_indicator(hf, "o2")
+    P_v = _shell_indicator(hf, "v1")
+    # i (o1) and J (o2) are in different spaces: no exchange-type pair mask
+    apply = _apply_cvs_pphh_pphh_1(
+        hf,
+        ococ=_masked(hf.ococ, einsum("ik,JL->iJkL", P_o, P_C)),
+        ovov=_masked(hf.ovov, einsum("kj,bc->kbjc", P_o, P_v)),
+        cvcv=_masked(hf.cvcv, einsum("KJ,bc->KbJc", P_C, P_v)),
+        vvvv=_masked(hf.vvvv, _pair_mask(P_v)),
+    )
+    return AdcBlock(apply, diagonal_pphh_pphh_1(hf))
 
 
 #

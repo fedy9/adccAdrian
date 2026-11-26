@@ -42,6 +42,9 @@ class MethodLevel(Enum):
     TWO_X = "2x"    # extended 2nd-order ADC: 2p2h-2p2h in 1st order
     TWO_X_DIA = "2xD" # diagonal approx. of ADC(3)'s pphh-pphh block
     THREE_DIA = "3D" # diagonal approx. of ADC(2)-x's pphh-pphh block
+    # spin-pure approx.: keep all couplings within each spatial quadruple ijab
+    TWO_X_QUAD = "2xQ"
+    THREE_QUAD = "3Q"
     # 1st-order ISR: in singles excitation space only (starting from 1-particle
     # operators, doubles are required for a consistent first-order description)
     ONE_S = "1s"
@@ -295,7 +298,8 @@ class AdcMethod(Method):
         ): LevelSpec(
             max_level=4,
             special_levels=(MethodLevel.TWO_X, MethodLevel.TWO_X_DIA,
-                           MethodLevel.THREE_DIA)
+                           MethodLevel.THREE_DIA, MethodLevel.TWO_X_QUAD,
+                           MethodLevel.THREE_QUAD)
         ),
         LevelKey(
             adc_type=AdcType.PP,
@@ -304,7 +308,8 @@ class AdcMethod(Method):
         ): LevelSpec(
             max_level=3,
             special_levels=(MethodLevel.TWO_X, MethodLevel.TWO_X_DIA,
-                           MethodLevel.THREE_DIA)
+                           MethodLevel.THREE_DIA, MethodLevel.TWO_X_QUAD,
+                           MethodLevel.THREE_QUAD)
         )
     }
 

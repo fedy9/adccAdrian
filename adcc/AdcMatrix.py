@@ -75,6 +75,8 @@ class AdcMatrixlike:
         "adc2x": {"ph_ph": 2, "ph_pphh": 1, "pphh_ph": 1, "pphh_pphh": 1},
         "adc2xD": {"ph_ph": 2, "ph_pphh": 1, "pphh_ph": 1, "pphh_pphh": "1d"},
         "adc3D": {"ph_ph": 3, "ph_pphh": 2, "pphh_ph": 2, "pphh_pphh": "1d"},
+        "adc2xQ": {"ph_ph": 2, "ph_pphh": 1, "pphh_ph": 1, "pphh_pphh": "1q"},
+        "adc3Q": {"ph_ph": 3, "ph_pphh": 2, "pphh_ph": 2, "pphh_pphh": "1q"},
         "isr1s": {"ph_ph": 1, "ph_pphh": None, "pphh_ph": None, "pphh_pphh": None},
         "isr2d": {"ph_ph": 2, "ph_pphh": 1, "pphh_ph": 1, "pphh_pphh": 0},
         "isr3d": {"ph_ph": 3, "ph_pphh": 2, "pphh_ph": 2, "pphh_pphh": 1},
@@ -157,7 +159,7 @@ class AdcMatrixlike:
         for block, order in block_orders.items():
             if order is None:
                 continue
-            if order == "1d":
+            if order in ("1d", "1q"):
                 order = 1
             assert order >= 0
             # ensure that the block is valid for the given adc type

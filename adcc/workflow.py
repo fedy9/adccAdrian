@@ -30,7 +30,7 @@ from .guess import (guesses_any, guesses_singlet, guesses_spin_flip,
                     guesses_triplet)
 from .LazyMp import LazyMp
 from .AdcMatrix import AdcMatrix, AdcMatrixlike, AdcExtraTerm
-from .AdcMethod import AdcMethod, IsrMethod
+from .AdcMethod import AdcMethod, IsrMethod, MethodLevel
 from .exceptions import InputError
 from .ExcitedStates import ExcitedStates
 from .ReferenceState import ReferenceState as adcc_ReferenceState
@@ -47,7 +47,7 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
             n_guesses_doubles=None, output=sys.stdout, core_orbitals=None,
             frozen_core=None, frozen_virtual=None, method=None,
             n_singlets=None, n_triplets=None, n_spin_flip=None,
-            environment=None, **solverargs):
+            environment=None, drop_vvvv=None, **solverargs):
     """Run an ADC calculation.
 
     Main entry point to run an ADC calculation. The reference to build the ADC
@@ -137,6 +137,17 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
         The keywords to specify how coupling to an environment model,
         e.g. PE, is treated. For details see :ref:`environment`.
 
+    drop_vvvv : bool or NoneType, optional
+        Release the cached full vvvv ERI block after the ADC matrix has been
+        set up, to reduce the memory during the eigensolver. Only possible for
+        methods whose matrix-vector products do not use the full vvvv block,
+        i.e., the diagonal (adc2xD, adc3D) and spin-pure block (adc2xQ, adc3Q)
+        approximations of the pphh-pphh block. The peak memory during the setup
+        is not reduced. A later request of the vvvv block (e.g., for
+        two-particle properties) re-imports it. By default (None) the block is
+        dropped for these methods and kept for all others. False always keeps
+        it, True raises an error for methods which still need it.
+
     Other parameters
     ----------------
     max_subspace : int, optional
@@ -186,6 +197,8 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
     matrix = construct_adcmatrix(
         data_or_matrix, core_orbitals=core_orbitals, frozen_core=frozen_core,
         frozen_virtual=frozen_virtual, method=method)
+    if drop_vvvv or (drop_vvvv is None and can_drop_full_vvvv(matrix)):
+        drop_full_vvvv(matrix)
 
     n_states, kind = validate_state_parameters(
         matrix.reference_state, n_states=n_states, n_singlets=n_singlets,
@@ -230,6 +243,34 @@ def run_adc(data_or_matrix, n_states=None, kind="any", conv_tol=None,
 #
 # Individual steps
 #
+def can_drop_full_vvvv(matrix):
+    """
+    Whether the matrix-vector products of the (already set up) ADC matrix
+    do not use the full vvvv ERI block, such that it can be released.
+    """
+    allowed = (MethodLevel.TWO_X_DIA, MethodLevel.THREE_DIA,
+               MethodLevel.TWO_X_QUAD, MethodLevel.THREE_QUAD)
+    method = getattr(matrix, "method", None)
+    return (isinstance(matrix, AdcMatrix) and isinstance(method, AdcMethod)
+            and method.level in allowed)
+
+
+def drop_full_vvvv(matrix):
+    """
+    Release the cached full vvvv ERI block of the reference state of an
+    (already set up) ADC matrix. Only allowed for methods whose matrix-vector
+    products do not use the full vvvv block. Internal function called from
+    run_adc.
+    """
+    if not can_drop_full_vvvv(matrix):
+        raise InputError("drop_vvvv is only possible for the methods "
+                         "adc2xD, adc3D, adc2xQ and adc3Q (and their CVS "
+                         "variants).")
+    hf = matrix.reference_state
+    hf.cached_eri_blocks = [block for block in hf.cached_eri_blocks
+                            if block != "v1v1v1v1"]
+
+
 def construct_adcmatrix(data_or_matrix, core_orbitals=None, frozen_core=None,
                         frozen_virtual=None, method=None):
     """
@@ -390,7 +431,10 @@ def diagonalise_adcmatrix(matrix, n_states, kind, eigensolver="davidson",
         # However, the error seems very small (1-2 meV) in comparison to the diag.
         # approx. error itself. Enforcing the spin-kind thus leads to a stalled
         # Davidson because the pure singlet state is no true eigenstate anymore.
-        if not matrix.method.level.to_str().endswith("D"):
+        # The block approximations adc2xQ and adc3Q keep these couplings, are
+        # spin pure and thus use the IndexSpinSymmetrisation.
+        if matrix.method.level not in (MethodLevel.TWO_X_DIA,
+                                       MethodLevel.THREE_DIA):
             explicit_symmetrisation = IndexSpinSymmetrisation(
                 matrix, enforce_spin_kind=kind
             )
