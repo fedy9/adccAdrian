@@ -313,11 +313,21 @@ def block_cvs_pphh_pphh_1d(hf, mp, intermediates):
 # are built from 2-index shell indicator matrices, so libtensor skips all
 # zero tiles and the cost stays O(o^2 v^2) (times the orbital tile size).
 #
+# Orbitals whose orbital energies differ by less than this threshold (in Hartree)
+# are treated as degenerate, i.e., as one shell. Exact degeneracies typically
+# show splittings of ~1e-14, but slightly broken symmetry (e.g., rounded or
+# optimised geometries) easily gives ~1e-7, while real gaps are >~1e-4.
+# Treating near-degenerate orbitals as separate shells would artificially split
+# degenerate states (by ~meV). Can be modified by the user, e.g.
+# adcc.adc_pp.matrix.shell_degeneracy_threshold = 1e-6
+shell_degeneracy_threshold = 1e-5
+
+
 def _shell_indicator(hf, space):
     """
     P[p_s, q_t] = 1 if the spatial orbitals of p and q belong to the same
     degenerate shell (for all spins s, t), else 0. Orbitals are degenerate if
-    their orbital energies differ by less than the SCF convergence tolerance.
+    their orbital energies differ by less than shell_degeneracy_threshold.
 
     Requires that the k-th alpha and the k-th beta orbital of the space are the
     same spatial orbital, which is verified via the MO coefficients (alpha and
@@ -337,7 +347,9 @@ def _shell_indicator(hf, space):
     # orbitals within a space are sorted by energy: consecutive orbitals with
     # an energy gap below the threshold form a shell
     energies = hf.orbital_energies(space).to_ndarray()[:n_alpha]
-    shell = np.concatenate([[0], np.cumsum(np.diff(energies) > hf.conv_tol)])
+    shell = np.concatenate(
+        [[0], np.cumsum(np.diff(energies) > shell_degeneracy_threshold)]
+    )
     shell = shell[np.arange(n) % n_alpha]
     indicator = (shell[:, None] == shell[None, :]).astype(float)
     ret = Tensor(hf.mospaces, space + space, permutations=["ij", "ji"],

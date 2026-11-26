@@ -31,7 +31,7 @@ import pytest
 
 import adcc
 from adcc.AmplitudeVector import AmplitudeVector
-from adcc.adc_pp.matrix import block
+from adcc.adc_pp.matrix import block, shell_degeneracy_threshold
 from adcc.solver.explicit_symmetrisation import IndexSpinSymmetrisation
 
 pytestmark = pytest.mark.skipif("pyscf" not in adcc.backends.available(),
@@ -86,13 +86,13 @@ class _NumpyReference:
 
     @staticmethod
     def shells(hf, space):
-        """Shell label of each spin orbital (degenerate within conv_tol)"""
+        """Shell label of each spin orbital (degenerate within threshold)"""
         n_alpha = hf.mospaces.n_orbs_alpha(space)
         e = hf.orbital_energies(space).to_ndarray()
         assert np.allclose(e[:n_alpha], e[n_alpha:])
         labels = np.zeros(n_alpha, dtype=int)
         for k in range(1, n_alpha):
-            if abs(e[k] - e[k - 1]) < hf.conv_tol:
+            if abs(e[k] - e[k - 1]) < shell_degeneracy_threshold:
                 labels[k] = labels[k - 1]
             else:
                 labels[k] = labels[k - 1] + 1
@@ -253,6 +253,9 @@ def test_quadruple_eigenpairs_converge(method, core_orbitals, kind):
     # T2 states of CH4 (triples)
     ("C 0 0 0; H 1.19 1.19 1.19; H -1.19 -1.19 1.19; H -1.19 1.19 -1.19; "
      "H 1.19 -1.19 -1.19", "6-31g", [(0, 1, 2), (3, 4, 5)]),
+    # slightly broken symmetry: orbital splittings ~1e-7 must still form shells
+    ("C 0 0 0; H 1.19 1.19 1.190001; H -1.19 -1.19 1.19; H -1.19 1.19 -1.19; "
+     "H 1.19 -1.19 -1.19", "6-31g", [(0, 1, 2), (3, 4, 5)]),
 ])
 def test_quadruple_degenerate_states(atom, basis, degenerate_sets):
     """With degenerate orbitals, degenerate states have to stay degenerate"""
@@ -260,6 +263,7 @@ def test_quadruple_degenerate_states(atom, basis, degenerate_sets):
                           conv_tol=1e-9, output=None)
     e = states.excitation_energy
     for group in degenerate_sets:
+        # without shells the splitting would be ~1e-4 (meV)
         assert np.ptp(e[list(group)]) < 1e-6, (group, e)
 
 
